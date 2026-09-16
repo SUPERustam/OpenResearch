@@ -13,7 +13,7 @@ import { ltr } from "../i18n";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { FolderTree, GitBranch, Terminal } from "lucide-react";
+import { FolderTree, GitBranch, Package, Terminal } from "lucide-react";
 import { parseDiff, type FileData } from "react-diff-view";
 import {
   backendKind,
@@ -46,6 +46,12 @@ const HOVER_CLOSE_MS = 150;
 const treeViewportMoves = new EventTarget();
 export function dismissTreeHoverCards() {
   treeViewportMoves.dispatchEvent(new Event("move"));
+}
+
+/** Subscribe to canvas pan/zoom (same channel as hover-card dismissal). */
+export function onTreeViewportMove(listener: () => void): () => void {
+  treeViewportMoves.addEventListener("move", listener);
+  return () => treeViewportMoves.removeEventListener("move", listener);
 }
 
 /** Hover-intent state for a node's detail card. `rect` is non-null while the
@@ -99,7 +105,12 @@ export function useHoverIntent(ref: RefObject<HTMLElement | null>, refreshKey: u
     closeTimer.current = window.setTimeout(() => setRect(null), HOVER_CLOSE_MS);
   }, []);
   const keepOpen = useCallback(() => window.clearTimeout(closeTimer.current), []);
-  return { rect, onMouseEnter, onMouseLeave, keepOpen };
+  const dismiss = useCallback(() => {
+    window.clearTimeout(openTimer.current);
+    window.clearTimeout(closeTimer.current);
+    setRect(null);
+  }, []);
+  return { rect, onMouseEnter, onMouseLeave, keepOpen, dismiss };
 }
 
 interface DiffStat {
@@ -126,6 +137,7 @@ export function ExpHoverCard({
   anchor,
   onOpenLogs,
   onOpenCode,
+  onOpenArtifacts,
   onMouseEnter,
   onMouseLeave,
 }: {
@@ -137,6 +149,7 @@ export function ExpHoverCard({
   anchor: DOMRect;
   onOpenLogs?: (intent: TabOpenIntent) => void;
   onOpenCode: (intent: TabOpenIntent) => void;
+  onOpenArtifacts: () => void;
   onMouseEnter: () => void;
   onMouseLeave: () => void;
 }) {
@@ -255,6 +268,14 @@ export function ExpHoverCard({
         >
           <FolderTree size={13} />
           {m.exp_hover_card_code()}
+        </button>
+        <button
+          type="button"
+          title={m.tree_view_open_artifacts()}
+          onClick={onOpenArtifacts}
+        >
+          <Package size={13} />
+          {m.tree_view_artifacts()}
         </button>
       </div>
       {body && (

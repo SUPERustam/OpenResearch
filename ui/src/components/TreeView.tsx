@@ -12,22 +12,39 @@ import {
   type NodeProps,
   type Viewport,
 } from "@xyflow/react";
-import { Ellipsis, FolderTree, Terminal } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Ellipsis, FolderTree, Package, Terminal } from "lucide-react";
 import { GitHubMark } from "./BackendLogos";
-import { memo, useMemo, useRef } from "react";
+import { FileTypeIcon } from "./FileTypeIcon";
+import {
+  createContext,
+  memo,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
+import { createPortal } from "react-dom";
 import {
   githubBranchUrl,
   fmtNumber,
   runDisplayStatus,
   timeAgo,
+  type ArtifactEntry,
   type Experiment,
   type Project,
   type Run,
 } from "../api";
 import type { ExperimentView } from "./DetailDrawer";
 import type { CodeView } from "./CodeTab";
-import { ExpHoverCard, dismissTreeHoverCards, useHoverIntent } from "./ExpHoverCard";
+import { ExpHoverCard, dismissTreeHoverCards, onTreeViewportMove, useHoverIntent } from "./ExpHoverCard";
 import { statusLabel, StatusBadge } from "./StatusBadge";
+import { experimentArtifactFiles, type ExperimentArtifactFile } from "../experimentArtifacts";
+import { getArtifactsQuery } from "../queries/files";
 import { tabOpenGestureHandlers, type TabOpenIntent } from "../tabPreview";
 
 const EMPTY_STATE_CLASS_NAME = [
@@ -39,7 +56,7 @@ const EMPTY_STATE_CLASS_NAME = [
   "[&_p.empty-state-hint]:text-subtext empty-state-cta gap-1.5",
 ].join(" ");
 
-const NODE_W = 264;
+const NODE_W = 304;
 const NODE_H = 132;
 const GAP_X = 44;
 const GAP_Y = 72;
@@ -63,6 +80,7 @@ type ExpNodeData = {
     view: CodeView,
     intent: TabOpenIntent,
   ) => void;
+  onOpenArtifact: (path: string, intent: TabOpenIntent) => void;
 };
 type ExpFlowNode = Node<ExpNodeData, "exp">;
 
@@ -182,26 +200,176 @@ function runSquareClass(status: string): string {
   return "other";
 }
 
+const EMPTY_ARTIFACT_ENTRIES: ArtifactEntry[] = [];
+
+const TreeArtifactsContext = createContext<{
+  entries: ArtifactEntry[];
+  pending: boolean;
+}>({ entries: EMPTY_ARTIFACT_ENTRIES, pending: false });
+
+function ExpArtifactsPopover({
+  triggerRef,
+  files,
+  pending,
+  onOpen,
+  onClose,
+}: {
+  triggerRef: RefObject<HTMLButtonElement | null>;
+  files: ExperimentArtifactFile[];
+  pending: boolean;
+  onOpen: (path: string, intent: TabOpenIntent) => void;
+  onClose: () => void;
+}) {
+  const menuRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const triggerRect = triggerRef.current?.getBoundingClientRect();
+  const [position, setPosition] = useState({
+    x: triggerRect?.left ?? 0,
+    y: (triggerRect?.bottom ?? 0) + 6,
+  });
+
+  useLayoutEffect(() => {
+    const menu = menuRef.current;
+    const trigger = triggerRef.current;
+    if (!menu || !trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    setPosition({
+      x: Math.max(8, Math.min(rect.left, window.innerWidth - menu.offsetWidth - 8)),
+      y: Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - menu.offsetHeight - 8)),
+    });
+  }, [triggerRef, files, pending]);
+
+  useEffect(() => {
+    const close = () => onCloseRef.current();
+    const dismiss = (event: Event) => {
+      const target = event.target instanceof Node ? event.target : null;
+      if (menuRef.current?.contains(target) || triggerRef.current?.contains(target)) return;
+      onCloseRef.current();
+    };
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      onCloseRef.current();
+      triggerRef.current?.focus();
+    };
+    document.addEventListener("pointerdown", dismiss);
+    document.addEventListener("keydown", keydown, true);
+    window.addEventListener("resize", close);
+    const stopViewport = onTreeViewportMove(close);
+    return () => {
+      document.removeEventListener("pointerdown", dismiss);
+      document.removeEventListener("keydown", keydown, true);
+      window.removeEventListener("resize", close);
+      stopViewport();
+    };
+  }, [triggerRef]);
+
+  return createPortal(
+    <div
+      ref={menuRef}
+      role="menu"
+      aria-label={m.tree_view_artifacts()}
+      className="option-menu fixed z-100 min-w-56 max-w-80 max-h-80 overflow-y-auto overscroll-contain rounded-md border border-border bg-background p-1 shadow-menu"
+      style={{ left: position.x, top: position.y }}
+    >
+      {pending && files.length === 0 ? (
+        <div className="px-2 py-1.5 text-sm text-muted">{m.artifacts_tab_loading()}</div>
+      ) : files.length === 0 ? (
+        <div className="px-2 py-1.5 text-sm text-muted">{m.tree_view_no_matching_artifacts()}</div>
+      ) : (
+        files.map((file) => (
+          <button
+            key={file.path}
+            type="button"
+            role="menuitem"
+            title={m.a11y_artifact_preview({ path: ltr(file.relativePath) })}
+            className="model-item flex w-full min-w-0 items-center gap-1.5 rounded-sm px-2 py-1 text-start text-sm text-text transition-[background,color] duration-120 ease-standard hover:bg-surface"
+            {...tabOpenGestureHandlers<HTMLButtonElement>((intent) => onOpen(file.path, intent))}
+          >
+            <FileTypeIcon name={file.name} />
+            <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
+              {file.relativePath}
+            </span>
+          </button>
+        ))
+      )}
+    </div>,
+    document.body,
+  );
+}
+
 const ExpNode = memo(function ExpNode({ data }: NodeProps<ExpFlowNode>) {
   useLocale();
-  const { exp, latestRun, runs, isBaseline, parentSlug, githubOwner, githubRepo, onOpenView, onOpenCode } = data;
+  const {
+    exp,
+    latestRun,
+    runs,
+    isBaseline,
+    parentSlug,
+    githubOwner,
+    githubRepo,
+    onOpenView,
+    onOpenCode,
+    onOpenArtifact,
+  } = data;
   const status = latestRun ? runDisplayStatus(latestRun) : undefined;
   const live = status === "running" || status === "starting" || status === "cancelling";
   const kind = isBaseline ? m.tree_baseline() : live ? m.tree_running() : m.tree_experiment();
   const squares = runs.slice(-MAX_SQUARES);
+  const artifacts = useContext(TreeArtifactsContext);
+  const files = useMemo(
+    () => experimentArtifactFiles(artifacts.entries, exp.slug),
+    [artifacts.entries, exp.slug],
+  );
 
   // `data` is rebuilt on every experiments/runs change (a superset of the
   // re-layouts that matter), so it doubles as the hover card's re-measure
   // key. Canvas pan/zoom dismissal arrives via dismissTreeHoverCards, wired
   // to the ReactFlow onMoveStart prop below.
   const rootRef = useRef<HTMLDivElement>(null);
+  const artifactsBtnRef = useRef<HTMLButtonElement>(null);
+  const artifactsOpenRef = useRef(false);
+  const [artifactsOpen, setArtifactsOpen] = useState(false);
+  artifactsOpenRef.current = artifactsOpen;
   const hover = useHoverIntent(rootRef, data);
+
+  const onNodeMouseEnter = useCallback(() => {
+    if (artifactsOpenRef.current) return;
+    hover.onMouseEnter();
+  }, [hover]);
+
+  const toggleArtifacts = useCallback(() => {
+    setArtifactsOpen((open) => {
+      if (!open) {
+        hover.dismiss();
+        artifactsOpenRef.current = true;
+        return true;
+      }
+      artifactsOpenRef.current = false;
+      return false;
+    });
+  }, [hover]);
+
+  const closeArtifacts = useCallback(() => {
+    artifactsOpenRef.current = false;
+    setArtifactsOpen(false);
+  }, []);
+
+  const openArtifact = useCallback(
+    (path: string, intent: TabOpenIntent) => {
+      closeArtifacts();
+      onOpenArtifact(path, intent);
+    },
+    [closeArtifacts, onOpenArtifact],
+  );
 
   return (
     <div
       ref={rootRef}
-      className={`exp-node w-66 border border-border rounded-md bg-background py-2.5 px-3 shadow-tree text-sm transition-[box-shadow] duration-120 ease-standard [&:hover]:shadow-tree-hover [&.live]:border-accent-teal [&.live]:shadow-tree-live [&_.node-overview-link]:block [&_.node-overview-link]:w-full [&_.node-overview-link]:p-0 [&_.node-overview-link]:border-0 [&_.node-overview-link]:bg-transparent [&_.node-overview-link]:text-inherit [&_.node-overview-link]:[font:inherit] [&_.node-overview-link]:text-start [&_.node-overview-link]:cursor-pointer [&_.node-overview-link:hover_.node-slug]:underline [&_.node-overview-link:hover_.node-slug]:underline-offset-[3px] [&_.node-overview-link:focus-visible]:outline-2 [&_.node-overview-link:focus-visible]:outline-solid [&_.node-overview-link:focus-visible]:outline-accent [&_.node-overview-link:focus-visible]:outline-offset-4 [&_.node-overview-link:focus-visible]:rounded-xs [&_.node-eyebrow]:flex [&_.node-eyebrow]:items-center [&_.node-eyebrow]:justify-between [&_.node-eyebrow]:gap-2 [&_.node-eyebrow]:mb-1.5 [&_.node-eyebrow]:text-xs [&_.node-eyebrow]:font-medium [&_.node-eyebrow]:text-muted [&_.node-head]:flex [&_.node-head]:items-center [&_.node-head]:gap-[7px] [&_.node-head]:min-w-0 [&_.node-status]:w-2 [&_.node-status]:h-2 [&_.node-status]:rounded-full [&_.node-status]:shrink-0 [&_.node-slug]:text-sm [&_.node-slug]:font-semibold [&_.node-slug]:text-text [&_.node-slug]:flex-1 [&_.node-slug]:min-w-0 [&_.node-slug]:overflow-hidden [&_.node-slug]:text-ellipsis [&_.node-slug]:whitespace-nowrap [&_.node-title]:mt-1 [&_.node-title]:text-text [&_.node-title]:text-sm [&_.node-title]:line-clamp-2 [&_.node-meta]:mt-2 [&_.node-meta]:flex [&_.node-meta]:items-center [&_.node-meta]:gap-2 [&_.node-meta]:text-xs [&_.node-meta]:text-muted [&_.node-actions]:mt-2 [&_.node-actions]:pt-1.5 [&_.node-actions]:border-t [&_.node-actions]:border-t-border-variant [&_.node-actions]:flex [&_.node-actions]:items-center [&_.node-actions]:gap-[3px] [&_.node-action]:inline-flex [&_.node-action]:items-center [&_.node-action]:gap-[5px] [&_.node-action]:py-[3px] [&_.node-action]:px-1.5 [&_.node-action]:text-sm [&_.node-action]:font-medium [&_.node-action]:text-text [&_.node-action]:rounded-sm [&_.node-action]:no-underline [&_.node-action:hover]:text-text [&_.node-action:hover]:bg-surface [&_.node-action-ext]:ms-auto [&_.node-action-ext]:py-[3px] [&_.node-action-ext]:px-[5px] ${live ? "live" : ""}`}
-      onMouseEnter={hover.onMouseEnter}
+      className={`exp-node w-76 border border-border rounded-md bg-background py-2.5 px-3 shadow-tree text-sm transition-[box-shadow] duration-120 ease-standard [&:hover]:shadow-tree-hover [&.live]:border-accent-teal [&.live]:shadow-tree-live [&_.node-overview-link]:block [&_.node-overview-link]:w-full [&_.node-overview-link]:p-0 [&_.node-overview-link]:border-0 [&_.node-overview-link]:bg-transparent [&_.node-overview-link]:text-inherit [&_.node-overview-link]:[font:inherit] [&_.node-overview-link]:text-start [&_.node-overview-link]:cursor-pointer [&_.node-overview-link:hover_.node-slug]:underline [&_.node-overview-link:hover_.node-slug]:underline-offset-[3px] [&_.node-overview-link:focus-visible]:outline-2 [&_.node-overview-link:focus-visible]:outline-solid [&_.node-overview-link:focus-visible]:outline-accent [&_.node-overview-link:focus-visible]:outline-offset-4 [&_.node-overview-link:focus-visible]:rounded-xs [&_.node-eyebrow]:flex [&_.node-eyebrow]:items-center [&_.node-eyebrow]:justify-between [&_.node-eyebrow]:gap-2 [&_.node-eyebrow]:mb-1.5 [&_.node-eyebrow]:text-xs [&_.node-eyebrow]:font-medium [&_.node-eyebrow]:text-muted [&_.node-head]:flex [&_.node-head]:items-center [&_.node-head]:gap-[7px] [&_.node-head]:min-w-0 [&_.node-status]:w-2 [&_.node-status]:h-2 [&_.node-status]:rounded-full [&_.node-status]:shrink-0 [&_.node-slug]:text-sm [&_.node-slug]:font-semibold [&_.node-slug]:text-text [&_.node-slug]:flex-1 [&_.node-slug]:min-w-0 [&_.node-slug]:overflow-hidden [&_.node-slug]:text-ellipsis [&_.node-slug]:whitespace-nowrap [&_.node-title]:mt-1 [&_.node-title]:text-text [&_.node-title]:text-sm [&_.node-title]:line-clamp-2 [&_.node-meta]:mt-2 [&_.node-meta]:flex [&_.node-meta]:items-center [&_.node-meta]:gap-2 [&_.node-meta]:text-xs [&_.node-meta]:text-muted [&_.node-actions]:mt-2 [&_.node-actions]:pt-1.5 [&_.node-actions]:border-t [&_.node-actions]:border-t-border-variant [&_.node-actions]:flex [&_.node-actions]:items-center [&_.node-actions]:flex-nowrap [&_.node-actions]:gap-[3px] [&_.node-action]:inline-flex [&_.node-action]:items-center [&_.node-action]:gap-[5px] [&_.node-action]:py-[3px] [&_.node-action]:px-1.5 [&_.node-action]:text-sm [&_.node-action]:font-medium [&_.node-action]:text-text [&_.node-action]:rounded-sm [&_.node-action]:no-underline [&_.node-action:hover]:text-text [&_.node-action:hover]:bg-surface [&_.node-action-ext]:ms-auto [&_.node-action-ext]:py-[3px] [&_.node-action-ext]:px-[5px] ${live ? "live" : ""}`}
+      onMouseEnter={onNodeMouseEnter}
       onMouseLeave={hover.onMouseLeave}
     >
       <Handle type="target" position={Position.Top} />
@@ -242,7 +410,7 @@ const ExpNode = memo(function ExpNode({ data }: NodeProps<ExpFlowNode>) {
           {latestRun && <span>{timeAgo(latestRun.createdAt)}</span>}
         </div>
       </div>
-      {/* Direct view shortcuts — code always, logs once there's a run. */}
+      {/* Direct view shortcuts — code always, logs once there's a run, artifacts always. */}
       <div className="node-actions" onClick={(e) => e.stopPropagation()}>
         {runs.length > 0 && (
           <button
@@ -266,6 +434,18 @@ const ExpNode = memo(function ExpNode({ data }: NodeProps<ExpFlowNode>) {
           <FolderTree size={13} />
           {m.tree_view_code()}
         </button>
+        <button
+          ref={artifactsBtnRef}
+          type="button"
+          className="node-action"
+          title={m.tree_view_open_artifacts()}
+          aria-haspopup="menu"
+          aria-expanded={artifactsOpen}
+          onClick={toggleArtifacts}
+        >
+          <Package size={13} />
+          {m.tree_view_artifacts()}
+        </button>
         {/* Icon-only: labeled actions + the link overflow the card's fixed width. */}
         {githubOwner && githubRepo && <a
           className="node-action node-action-ext"
@@ -282,7 +462,7 @@ const ExpNode = memo(function ExpNode({ data }: NodeProps<ExpFlowNode>) {
       <Handle type="source" position={Position.Bottom} />
       {/* Node and card share one leave handler — React's enter/leave pairing
         * across the portal (fiber-tree walk) relies on it; don't split them. */}
-      {hover.rect && (
+      {hover.rect && !artifactsOpen && (
         <ExpHoverCard
           exp={exp}
           runs={runs}
@@ -293,9 +473,19 @@ const ExpNode = memo(function ExpNode({ data }: NodeProps<ExpFlowNode>) {
             ? (intent) => onOpenView(exp.id, "terminal", intent)
             : undefined}
           onOpenCode={(intent) => onOpenCode(exp.id, exp.branchName, "files", intent)}
+          onOpenArtifacts={toggleArtifacts}
           onMouseEnter={hover.keepOpen}
           onMouseLeave={hover.onMouseLeave}
        />
+      )}
+      {artifactsOpen && (
+        <ExpArtifactsPopover
+          triggerRef={artifactsBtnRef}
+          files={files}
+          pending={artifacts.pending}
+          onOpen={openArtifact}
+          onClose={closeArtifacts}
+        />
       )}
     </div>
   );
@@ -349,6 +539,7 @@ export function TreeView({
   project,
   onOpenView,
   onOpenCode,
+  onOpenArtifact,
   agentSessionId,
   onShowProjectScope,
   viewport,
@@ -367,6 +558,8 @@ export function TreeView({
     view: CodeView,
     intent: TabOpenIntent,
   ) => void;
+  /** Open a project artifact file as a right-pane tab. */
+  onOpenArtifact: (path: string, intent: TabOpenIntent) => void;
   /** Current task scope: show only this chat session's experiments, eliding the rest.
    * Null = Entire project scope (the whole forest). */
   agentSessionId: string | null;
@@ -376,6 +569,14 @@ export function TreeView({
   viewport: Viewport | null;
   onViewportChange: (viewport: Viewport) => void;
 }) {
+  const artifactsQuery = useQuery(getArtifactsQuery(project.id));
+  const artifactsValue = useMemo(
+    () => ({
+      entries: artifactsQuery.data?.entries ?? EMPTY_ARTIFACT_ENTRIES,
+      pending: artifactsQuery.isPending,
+    }),
+    [artifactsQuery.data?.entries, artifactsQuery.isPending],
+  );
   const { nodes, edges } = useMemo(() => {
     const runsByExp = new Map<string, Run[]>();
     for (const run of runs) {
@@ -414,6 +615,7 @@ export function TreeView({
             githubRepo: project.githubEnabled ? project.githubRepo : "",
             onOpenView,
             onOpenCode,
+            onOpenArtifact,
           },
         });
       } else {
@@ -456,6 +658,7 @@ export function TreeView({
     runs,
     onOpenView,
     onOpenCode,
+    onOpenArtifact,
     project.githubOwner,
     project.githubRepo,
     project.githubEnabled,
@@ -485,25 +688,27 @@ export function TreeView({
   }
 
   return (
-    <ReactFlow
-      className="[&_.react-flow\_\_node.react-flow\_\_node-exp.selectable]:cursor-default [&_.react-flow\_\_node.react-flow\_\_node-elided.selectable]:cursor-pointer [&_.react-flow\_\_handle]:opacity-0 [&_.react-flow\_\_handle]:pointer-events-none [&_.react-flow\_\_attribution]:hidden!"
-      // Saved viewports initialize on mount; a new scope needs its own canvas.
-      key={agentSessionId ?? "project"}
-      nodes={nodes}
-      edges={edges}
-      nodeTypes={nodeTypes}
-      defaultEdgeOptions={defaultEdgeOptions}
-      nodesDraggable={false}
-      nodesConnectable={false}
-      nodesFocusable={false}
-      onMoveStart={dismissTreeHoverCards}
-      onMoveEnd={(event, nextViewport) => { if (event) onViewportChange(nextViewport); }}
-      minZoom={0.15}
-      defaultViewport={viewport ?? undefined}
-      fitView={viewport === null}
-      fitViewOptions={{ padding: 0.25, maxZoom: 1 }}
-    >
-      <Background variant={BackgroundVariant.Dots} color="var(--dots-strong)" gap={28} size={1.6} />
-    </ReactFlow>
+    <TreeArtifactsContext.Provider value={artifactsValue}>
+      <ReactFlow
+        className="[&_.react-flow\_\_node.react-flow\_\_node-exp.selectable]:cursor-default [&_.react-flow\_\_node.react-flow\_\_node-elided.selectable]:cursor-pointer [&_.react-flow\_\_handle]:opacity-0 [&_.react-flow\_\_handle]:pointer-events-none [&_.react-flow\_\_attribution]:hidden!"
+        // Saved viewports initialize on mount; a new scope needs its own canvas.
+        key={agentSessionId ?? "project"}
+        nodes={nodes}
+        edges={edges}
+        nodeTypes={nodeTypes}
+        defaultEdgeOptions={defaultEdgeOptions}
+        nodesDraggable={false}
+        nodesConnectable={false}
+        nodesFocusable={false}
+        onMoveStart={dismissTreeHoverCards}
+        onMoveEnd={(event, nextViewport) => { if (event) onViewportChange(nextViewport); }}
+        minZoom={0.15}
+        defaultViewport={viewport ?? undefined}
+        fitView={viewport === null}
+        fitViewOptions={{ padding: 0.25, maxZoom: 1 }}
+      >
+        <Background variant={BackgroundVariant.Dots} color="var(--dots-strong)" gap={28} size={1.6} />
+      </ReactFlow>
+    </TreeArtifactsContext.Provider>
   );
 }
