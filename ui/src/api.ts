@@ -1622,6 +1622,7 @@ export interface Harness {
   authenticated: boolean;
   authState: "ready" | "needsLogin" | "unknown" | "unsupported";
   authMethod?: "oauth" | "apiKey" | "local";
+  accountLoading?: boolean;
   account?: string;
   org?: string;
   plan?: string;
@@ -1633,6 +1634,16 @@ export interface Harness {
   models: HarnessModel[];
   options: HarnessOptions;
 }
+
+export interface HarnessSetupCommands {
+  install: string;
+  login: string;
+  update: string;
+  requiresNpm: boolean;
+}
+
+export const getHarnessSetupCommands = (signal?: AbortSignal) =>
+  get<Record<HarnessId, HarnessSetupCommands>>("/api/harnesses/setup/commands", signal);
 
 export const getHarnesses = (refresh = false, retryRejected = false, signal?: AbortSignal) => {
   const params = new URLSearchParams();
