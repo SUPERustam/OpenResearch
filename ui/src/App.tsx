@@ -1062,7 +1062,8 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
   );
 
   const openArtifactFileTab = useCallback(
-    (path: string) => openResolvedFileTab({ path, source: "artifacts" }, "keepOpen"),
+    (path: string, intent: TabOpenIntent = "keepOpen") =>
+      openResolvedFileTab({ path, source: "artifacts" }, intent),
     [openResolvedFileTab],
   );
 
@@ -1792,6 +1793,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
                         project={activeProject}
                         onOpenView={openExperimentTab}
                         onOpenCode={openCodeTabForExperiment}
+                        onOpenArtifact={openArtifactFileTab}
                         agentSessionId={effectiveScope === "agent" ? activeSessionId : null}
                         onShowProjectScope={showProjectScope}
                         viewport={treeViewport}
