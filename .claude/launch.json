@@ -1,0 +1,40 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "orx-1-cohyp",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "ORX_DATA_DIR=/Users/superustam/.local/share/openresearch-dev/slot-1",
+        "ORX_CACHE_DIR=/Users/superustam/.local/share/openresearch-dev/slot-1/cache",
+        "XDG_CONFIG_HOME=/Users/superustam/.local/share/openresearch-dev/slot-1-config",
+        "CARGO_TARGET_DIR=/Users/superustam/.local/share/openresearch-dev/cargo-target",
+        "cargo",
+        "run",
+        "--manifest-path",
+        "/Users/superustam/Documents/Skoltech/iw/cohyp/Cargo.toml",
+        "--",
+        "up",
+        "--no-browser",
+        "--port",
+        "4901"
+      ],
+      "port": 4901
+    },
+    {
+      "name": "ui-1-cohyp",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "ORX_BACKEND=http://127.0.0.1:4901",
+        "pnpm",
+        "-C",
+        "/Users/superustam/Documents/Skoltech/iw/cohyp/ui",
+        "dev",
+        "--port",
+        "5201",
+        "--strictPort"
+      ],
+      "port": 5201
+    }
+  ]
+}
