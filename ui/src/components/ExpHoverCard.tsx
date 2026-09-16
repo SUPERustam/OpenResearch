@@ -48,6 +48,12 @@ export function dismissTreeHoverCards() {
   treeViewportMoves.dispatchEvent(new Event("move"));
 }
 
+/** Subscribe to canvas pan/zoom (same channel as hover-card dismissal). */
+export function onTreeViewportMove(listener: () => void): () => void {
+  treeViewportMoves.addEventListener("move", listener);
+  return () => treeViewportMoves.removeEventListener("move", listener);
+}
+
 /** Hover-intent state for a node's detail card. `rect` is non-null while the
  * card should be open; it re-measures whenever `refreshKey` changes so SSE
  * updates that re-lay-out the tree can't leave the card pointing at a stale
@@ -99,7 +105,12 @@ export function useHoverIntent(ref: RefObject<HTMLElement | null>, refreshKey: u
     closeTimer.current = window.setTimeout(() => setRect(null), HOVER_CLOSE_MS);
   }, []);
   const keepOpen = useCallback(() => window.clearTimeout(closeTimer.current), []);
-  return { rect, onMouseEnter, onMouseLeave, keepOpen };
+  const dismiss = useCallback(() => {
+    window.clearTimeout(openTimer.current);
+    window.clearTimeout(closeTimer.current);
+    setRect(null);
+  }, []);
+  return { rect, onMouseEnter, onMouseLeave, keepOpen, dismiss };
 }
 
 interface DiffStat {
