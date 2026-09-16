@@ -61,9 +61,34 @@ test("a matching top-level file is listed by itself", () => {
   ]);
 });
 
+test("a file stem equal to the slug matches", () => {
+  const entries = [file("baseline.pdf"), dir("other", [file("other/a.csv")])];
+  assert.equal(matchExperimentArtifactRoot(entries, "baseline")?.path, "baseline.pdf");
+  assert.deepEqual(experimentArtifactFiles(entries, "baseline").map((entry) => entry.path), [
+    "baseline.pdf",
+  ]);
+});
+
+test("a unique two-token hyphen prefix matches demo-style filenames", () => {
+  const entries = [
+    file("cpu-apple-silicon-pipeline-results.md"),
+    file("nanochat-bottleneck-diagnosis.md"),
+    file("nanochat-base-training-curves.svg"),
+    dir("evidence", [file("evidence/training-metrics.csv")]),
+  ];
+  assert.equal(
+    matchExperimentArtifactRoot(entries, "cpu-apple-silicon-end-to-end-baseline")?.path,
+    "cpu-apple-silicon-pipeline-results.md",
+  );
+  assert.deepEqual(
+    experimentArtifactFiles(entries, "cpu-apple-silicon-end-to-end-baseline").map((entry) => entry.path),
+    ["cpu-apple-silicon-pipeline-results.md"],
+  );
+  assert.equal(matchExperimentArtifactRoot(entries, "matrix-lr-2x-probe"), null);
+});
+
 test("returns an empty list when nothing uniquely matches", () => {
   assert.deepEqual(experimentArtifactFiles(project, "missing-exp"), []);
-  assert.deepEqual(experimentArtifactFiles(project, "unrelated"), []);
   assert.equal(matchExperimentArtifactRoot(project, "transformer"), null);
 });
 
