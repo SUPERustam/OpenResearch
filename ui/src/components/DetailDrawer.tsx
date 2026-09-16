@@ -30,6 +30,7 @@ export function DetailDrawer({
   parentExperiment,
   onOpenView,
   onOpenCode,
+  onOpenArtifact,
 }: {
   experiment: Experiment;
   /** Owning project — supplies owner/repo for the GitHub branch link. */
@@ -41,6 +42,7 @@ export function DetailDrawer({
   parentExperiment: Experiment | null;
   onOpenView: (view: ExperimentView, runId: string | undefined, intent: TabOpenIntent) => void;
   onOpenCode: (view: CodeView, intent: TabOpenIntent) => void;
+  onOpenArtifact: (path: string, intent: TabOpenIntent) => void;
 }) {
   const expRuns = runs
     .filter((r) => r.experimentId === experiment.id)
@@ -55,6 +57,7 @@ export function DetailDrawer({
         runs={expRuns}
         onOpenLogs={(runId, intent) => onOpenView("terminal", runId, intent)}
         onOpenCode={(intent) => onOpenCode("files", intent)}
+        onOpenArtifact={onOpenArtifact}
      />
     );
   }

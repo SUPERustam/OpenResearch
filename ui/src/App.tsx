@@ -2046,6 +2046,9 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
                         ),
                       )
                     }
+                    onOpenArtifact={(path, intent) =>
+                      openFromRightTab(expTab, () => openArtifactFileTab(path, intent))
+                    }
                   />
                 )}
               </TabBody>

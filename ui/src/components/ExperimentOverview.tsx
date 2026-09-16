@@ -1,13 +1,18 @@
 import { m } from "../paraglide/messages.js";
 import { getLocale } from "../paraglide/runtime.js";
+import { useQuery } from "@tanstack/react-query";
 import {
   CalendarDays,
   Clock3,
   FolderTree,
   GitCommitHorizontal,
+  Package,
   Terminal,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { experimentArtifactFiles } from "../experimentArtifacts";
+import { getArtifactsQuery } from "../queries/files";
+import { ExperimentArtifactsMenu } from "./ExperimentArtifactsMenu";
 import {
   fmtDuration,
   runDisplayStatus,
@@ -55,6 +60,7 @@ export function ExperimentOverview({
   runs,
   onOpenLogs,
   onOpenCode,
+  onOpenArtifact,
 }: {
   experiment: Experiment;
   parentExperiment: Experiment | null;
@@ -62,12 +68,28 @@ export function ExperimentOverview({
   runs: Run[];
   onOpenLogs: (runId: string, intent: TabOpenIntent) => void;
   onOpenCode: (intent: TabOpenIntent) => void;
+  onOpenArtifact: (path: string, intent: TabOpenIntent) => void;
 }) {
   const latestRun = runs[0] ?? null;
   const hasLiveRun = runs.some(
     (run) => run.status === "running" || run.status === "starting",
   );
   const [now, setNow] = useState(() => Date.now());
+  const artifactsQuery = useQuery(getArtifactsQuery(project.id));
+  const files = useMemo(
+    () => experimentArtifactFiles(artifactsQuery.data?.entries ?? [], experiment.slug),
+    [artifactsQuery.data?.entries, experiment.slug],
+  );
+  const artifactsBtnRef = useRef<HTMLElement>(null);
+  const [artifactsOpen, setArtifactsOpen] = useState(false);
+  const closeArtifacts = useCallback(() => setArtifactsOpen(false), []);
+  const openArtifact = useCallback(
+    (path: string, intent: TabOpenIntent) => {
+      closeArtifacts();
+      onOpenArtifact(path, intent);
+    },
+    [closeArtifacts, onOpenArtifact],
+  );
 
   useEffect(() => {
     if (!hasLiveRun) return;
@@ -104,7 +126,28 @@ export function ExperimentOverview({
             <FolderTree size={15} />
             {m.experiment_overview_code()}
           </Button>
+          <span ref={artifactsBtnRef} className="inline-flex">
+            <Button
+              type="button"
+              title={m.experiment_overview_open_artifacts()}
+              aria-haspopup="menu"
+              aria-expanded={artifactsOpen}
+              onClick={() => setArtifactsOpen((open) => !open)}
+            >
+              <Package size={15} />
+              {m.experiment_overview_artifacts()}
+            </Button>
+          </span>
         </div>
+        {artifactsOpen && (
+          <ExperimentArtifactsMenu
+            triggerRef={artifactsBtnRef}
+            files={files}
+            pending={artifactsQuery.isPending}
+            onOpen={openArtifact}
+            onClose={closeArtifacts}
+          />
+        )}
 
         {experiment.description && (
           <section className="experiment-overview-section mt-5.5 pt-4.5 border-t border-t-border-variant [&_h2]:mt-0 [&_h2]:mx-0 [&_h2]:mb-3.5 [&_h2]:text-text [&_h2]:text-sm [&_h2]:font-semibold overview-description [&_.md]:text-text [&_.md]:leading-[1.65]">
