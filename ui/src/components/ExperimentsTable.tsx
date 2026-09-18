@@ -278,16 +278,16 @@ function ExperimentTableRow({
             {cancelling ? m.common_stopping() : m.common_stop()}
           </Button>
         )}
+        {artifactsOpen && (
+          <ExperimentArtifactsMenu
+            triggerRef={artifactsBtnRef}
+            files={files}
+            pending={artifactsPending}
+            onOpen={openArtifact}
+            onClose={closeArtifacts}
+          />
+        )}
       </div>
-      {artifactsOpen && (
-        <ExperimentArtifactsMenu
-          triggerRef={artifactsBtnRef}
-          files={files}
-          pending={artifactsPending}
-          onOpen={openArtifact}
-          onClose={closeArtifacts}
-        />
-      )}
     </div>
   );
 }

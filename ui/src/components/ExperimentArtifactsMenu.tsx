@@ -76,6 +76,10 @@ export function ExperimentArtifactsMenu({
       aria-label={m.tree_view_artifacts()}
       className="option-menu fixed z-100 min-w-56 max-w-80 max-h-80 overflow-y-auto overscroll-contain rounded-md border border-border bg-background p-1 shadow-menu"
       style={{ left: position.x, top: position.y }}
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
+      onDoubleClick={(event) => event.stopPropagation()}
+      onAuxClick={(event) => event.stopPropagation()}
     >
       {pending && files.length === 0 ? (
         <div className="px-2 py-1.5 text-sm text-muted">{m.artifacts_tab_loading()}</div>
