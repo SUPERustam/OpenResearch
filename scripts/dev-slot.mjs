@@ -18,14 +18,15 @@ const SCRIPT_PATH = fileURLToPath(import.meta.url)
 
 function usage() {
   return `Usage:
-  scripts/dev-slot.mjs start --db empty|copy [--worktree PATH] [--open]
+  scripts/dev-slot.mjs start --db empty|copy|live [--worktree PATH] [--open]
   scripts/dev-slot.mjs status [--worktree PATH]
   scripts/dev-slot.mjs stop [--worktree PATH]
   scripts/dev-slot.mjs cleanup [--worktree PATH]
 
 Database modes:
   empty  Start with a new database and no projects.
-  copy   Take a WAL-safe snapshot of the normal local CLI database and copy run logs.`
+  copy   Take a WAL-safe snapshot of the normal local CLI database and copy run logs.
+  live   Use the normal OpenResearch data, config, and cache directories in place.`
 }
 
 export function parseArgs(argv) {
@@ -44,7 +45,7 @@ export function parseArgs(argv) {
       index += 1
     } else if (arg === '--db') {
       const value = rest[index + 1]
-      if (!['empty', 'copy'].includes(value)) throw new Error('--db must be empty or copy')
+      if (!['empty', 'copy', 'live'].includes(value)) throw new Error('--db must be empty, copy, or live')
       options.db = value
       index += 1
     } else if (arg === '--open') {
@@ -57,7 +58,7 @@ export function parseArgs(argv) {
   }
 
   if (command === 'start' && options.db === null) {
-    throw new Error('start requires --db empty or --db copy')
+    throw new Error('start requires --db empty, copy, or live')
   }
   if (command !== 'start' && (options.db !== null || options.open)) {
     throw new Error(`--db and --open are only valid with start`)
@@ -117,7 +118,13 @@ function pathsFor(info, slot = null) {
   }
 }
 
-export function slotEnvironment(slotPaths) {
+export function slotEnvironment(slotPaths, dbMode = 'empty') {
+  if (dbMode === 'live') {
+    return {
+      CARGO_TARGET_DIR: slotPaths.cargoTargetDir,
+      ORX_DEV_SLOT_MODE: 'live',
+    }
+  }
   return {
     ORX_DATA_DIR: slotPaths.dataDir,
     ORX_CACHE_DIR: slotPaths.cacheDir,
@@ -237,12 +244,22 @@ export function resolveLiveDataDir(environment = process.env, home = os.homedir(
   return path.join(dataHome, 'openresearch')
 }
 
+export function resolveRuntimeDataDir(environment = process.env, home = os.homedir()) {
+  if (typeof environment.ORX_DATA_DIR === 'string' && environment.ORX_DATA_DIR.length > 0) {
+    return environment.ORX_DATA_DIR
+  }
+  return resolveLiveDataDir(environment, home)
+}
+
 export function sqliteBackupCommand(destination) {
   const escaped = destination.replaceAll('\\', '\\\\').replaceAll('"', '\\"')
   return `.backup "${escaped}"`
 }
 
-export function initializeDatabase(mode, destination, source = resolveLiveDataDir()) {
+export function initializeDatabase(mode, destination, source = mode === 'live' ? resolveRuntimeDataDir() : resolveLiveDataDir()) {
+  if (mode === 'live') {
+    return { sourceDb: path.join(source, 'orx.db'), copiedRunLogs: false }
+  }
   mkdirSync(destination, { recursive: true, mode: 0o700 })
   if (mode === 'empty') return { sourceDb: null, copiedRunLogs: false }
 
@@ -288,13 +305,15 @@ export function managedStateMatches(state, info, slotPaths) {
     && state.slotKey === slotPaths.slotKey
     && state.worktreePath === info.worktreePath
     && state.manifestPath === info.manifestPath
-    && ['empty', 'copy'].includes(state.dbMode)
+    && ['empty', 'copy', 'live'].includes(state.dbMode)
+    && (state.dbMode !== 'live' || state.standardStorage === true)
     && state.backendPort === slotPaths.backendPort
     && state.uiPort === slotPaths.uiPort
 }
 
-function configurationMatchesDirectories(slotPaths, configuration) {
+function configurationMatchesDirectories(slotPaths, configuration, state) {
   const args = configuration.runtimeArgs || []
+  if (state?.dbMode === 'live') return args.includes('ORX_DEV_SLOT_MODE=live')
   return args.includes(`ORX_DATA_DIR=${slotPaths.dataDir}`)
     && args.includes(`XDG_CONFIG_HOME=${slotPaths.configDir}`)
 }
@@ -304,7 +323,7 @@ function removeManagedDirectories(slotPaths, configuration, mainCheckout) {
   const manifestPath = manifestFromConfiguration(configuration, mainCheckout)
   const owner = manifestPath ? { worktreePath: path.dirname(manifestPath), manifestPath } : null
   if (!owner || !managedStateMatches(state, owner, slotPaths)) return false
-  if (!configurationMatchesDirectories(slotPaths, configuration)) return false
+  if (!configurationMatchesDirectories(slotPaths, configuration, state)) return false
   rmSync(slotPaths.dataDir, { recursive: true, force: true })
   rmSync(slotPaths.configDir, { recursive: true, force: true })
   rmSync(slotPaths.statePath, { force: true })
@@ -335,13 +354,13 @@ function reclaimStaleReservations(info, registry) {
   }
 }
 
-function configurationFor(info, slotPaths) {
+function configurationFor(info, slotPaths, dbMode) {
   return [
     {
       name: `orx-${slotPaths.slot}-${info.label}`,
       runtimeExecutable: 'env',
       runtimeArgs: [
-        ...Object.entries(slotEnvironment(slotPaths)).map(([key, value]) => `${key}=${value}`),
+        ...Object.entries(slotEnvironment(slotPaths, dbMode)).map(([key, value]) => `${key}=${value}`),
         'cargo', 'run', '--manifest-path', info.manifestPath,
         '--', 'up', '--no-browser', '--port', String(slotPaths.backendPort),
       ],
@@ -367,6 +386,7 @@ function stateFor(info, slotPaths, dbMode, database) {
     worktreePath: info.worktreePath,
     manifestPath: info.manifestPath,
     dbMode,
+    standardStorage: dbMode === 'live',
     sourceDb: database.sourceDb,
     copiedRunLogs: database.copiedRunLogs,
     phase: 'stopped',
@@ -438,20 +458,24 @@ async function reserveSlot(info, dbMode) {
 
     let state
     try {
-      const sourceDb = dbMode === 'copy' ? path.join(resolveLiveDataDir(), 'orx.db') : null
+      const sourceDb = ['copy', 'live'].includes(dbMode)
+        ? path.join(dbMode === 'live' ? resolveRuntimeDataDir() : resolveLiveDataDir(), 'orx.db')
+        : null
       state = stateFor(info, slotPaths, dbMode, { sourceDb, copiedRunLogs: false })
       state.phase = 'preparing'
       atomicWriteJson(slotPaths.statePath, state)
       const database = initializeDatabase(dbMode, slotPaths.dataDir)
-      mkdirSync(slotPaths.cacheDir, { recursive: true, mode: 0o700 })
-      mkdirSync(slotPaths.configDir, { recursive: true, mode: 0o700 })
+      if (dbMode !== 'live') {
+        mkdirSync(slotPaths.cacheDir, { recursive: true, mode: 0o700 })
+        mkdirSync(slotPaths.configDir, { recursive: true, mode: 0o700 })
+      }
       mkdirSync(slotPaths.cargoTargetDir, { recursive: true, mode: 0o700 })
       mkdirSync(slotPaths.logsDir, { recursive: true, mode: 0o700 })
       state.sourceDb = database.sourceDb
       state.copiedRunLogs = database.copiedRunLogs
       state.phase = 'stopped'
       atomicWriteJson(slotPaths.statePath, state)
-      registry.configurations.push(...configurationFor(info, slotPaths))
+      registry.configurations.push(...configurationFor(info, slotPaths, dbMode))
       atomicWriteJson(slotPaths.launchRegistry, registry)
       return { slotPaths, state, reused: false }
     } catch (error) {
@@ -620,7 +644,7 @@ async function startUnlocked(info, dbMode, openBrowser) {
       cwd: info.worktreePath,
       env: {
         ...process.env,
-        ...slotEnvironment(slotPaths),
+        ...slotEnvironment(slotPaths, state.dbMode),
         ORX_UI_DEV_ORIGIN: `http://localhost:${slotPaths.uiPort}`,
       },
     }, state.backendLog)
@@ -698,11 +722,14 @@ function printStatus(info) {
     return
   }
   const { slotPaths, state } = reservation
+  const dataDir = state?.dbMode === 'live' && state.sourceDb
+    ? path.dirname(state.sourceDb)
+    : slotPaths.dataDir
   console.log(`${slotPaths.slotKey} (${state?.dbMode || 'unknown database mode'})`)
   console.log(`  Backend: ${listenerPids(slotPaths.backendPort).length > 0 ? 'running' : 'stopped'} on ${slotPaths.backendPort}`)
   console.log(`  UI:      ${listenerPids(slotPaths.uiPort).length > 0 ? 'running' : 'stopped'} on ${slotPaths.uiPort}`)
-  console.log(`  Data:    ${slotPaths.dataDir}`)
-  console.log(`  Repos:   ${path.join(slotPaths.dataDir, 'repos')}`)
+  console.log(`  Data:    ${dataDir}`)
+  console.log(`  Repos:   ${path.join(dataDir, 'repos')}`)
   console.log(`  State:   ${state ? slotPaths.statePath : 'legacy/unmanaged'}`)
 }
 
@@ -775,7 +802,7 @@ async function cleanupUnlocked(info) {
     reservation.registry.configurations = reservation.registry.configurations.filter((configuration) =>
       !configurationOwnsSlot(configuration, slotPaths.slot))
     atomicWriteJson(slotPaths.launchRegistry, reservation.registry)
-    if (managedStateMatches(state, info, slotPaths) && configurationMatchesDirectories(slotPaths, backend)) {
+    if (managedStateMatches(state, info, slotPaths) && configurationMatchesDirectories(slotPaths, backend, state)) {
       rmSync(slotPaths.dataDir, { recursive: true, force: true })
       rmSync(slotPaths.configDir, { recursive: true, force: true })
       rmSync(slotPaths.statePath, { force: true })
