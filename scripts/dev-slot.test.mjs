@@ -11,15 +11,17 @@ import {
   managedStateMatches,
   parseArgs,
   resolveLiveDataDir,
+  resolveRuntimeDataDir,
   slotEnvironment,
   sqliteBackupCommand,
   supervisorCommandMatches,
 } from './dev-slot.mjs'
 
 test('requires an explicit database mode when starting', () => {
-  assert.throws(() => parseArgs(['start']), /requires --db empty or --db copy/)
+  assert.throws(() => parseArgs(['start']), /requires --db empty, copy, or live/)
   assert.equal(parseArgs(['start', '--db', 'empty']).db, 'empty')
   assert.equal(parseArgs(['start', '--db', 'copy', '--open']).open, true)
+  assert.equal(parseArgs(['start', '--db', 'live']).db, 'live')
 })
 
 test('empty mode creates no database', () => {
@@ -47,6 +49,29 @@ test('slot environment isolates data, cache, config, and build artifacts', () =>
     XDG_CONFIG_HOME: '/dev/slot-3-config',
     CARGO_TARGET_DIR: '/dev/cargo-target',
   })
+})
+
+test('live mode inherits standard OpenResearch storage directories', () => {
+  assert.deepEqual(slotEnvironment({ cargoTargetDir: '/dev/cargo-target' }, 'live'), {
+    CARGO_TARGET_DIR: '/dev/cargo-target',
+    ORX_DEV_SLOT_MODE: 'live',
+  })
+})
+
+test('live mode references the normal database without copying it', () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'orx-dev-slot-live-'))
+  try {
+    const source = path.join(root, 'source')
+    const destination = path.join(root, 'slot')
+    const result = initializeDatabase('live', destination, source)
+    assert.deepEqual(result, {
+      sourceDb: path.join(source, 'orx.db'),
+      copiedRunLogs: false,
+    })
+    assert.equal(existsSync(destination), false)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('copy mode takes a SQLite backup and copies run logs', () => {
@@ -88,6 +113,15 @@ test('copy source follows persisted settings before XDG defaults', () => {
   }
 })
 
+test('live mode follows the OpenResearch data-directory precedence', () => {
+  const environment = {
+    ORX_DATA_DIR: '/forced',
+    XDG_DATA_HOME: '/xdg-data',
+  }
+  assert.equal(resolveRuntimeDataDir(environment, '/home/test'), '/forced')
+  assert.equal(resolveRuntimeDataDir({ ...environment, ORX_DATA_DIR: '' }, '/home/test'), '/xdg-data/openresearch')
+})
+
 test('serializes lifecycle transitions for the same worktree', async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'orx-dev-slot-lock-'))
   try {
@@ -123,6 +157,8 @@ test('requires exact managed-state ownership before cleanup', () => {
   assert.equal(managedStateMatches(state, info, slot), true)
   assert.equal(managedStateMatches({ ...state, worktreePath: '/tmp/other' }, info, slot), false)
   assert.equal(managedStateMatches({ ...state, slotKey: 'slot-5' }, info, slot), false)
+  assert.equal(managedStateMatches({ ...state, dbMode: 'live' }, info, slot), false)
+  assert.equal(managedStateMatches({ ...state, dbMode: 'live', standardStorage: true }, info, slot), true)
 })
 
 test('supervisor identity includes its unguessable launch token', () => {
