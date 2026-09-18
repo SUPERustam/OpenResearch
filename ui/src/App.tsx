@@ -1809,6 +1809,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
                           : undefined
                       }
                       experiments={scopedExperiments}
+                      projectId={projectId}
                       onOpen={(experiment, intent) => {
                         openExperimentTab(experiment.id, "overview", intent);
                       }}
@@ -1825,6 +1826,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
                             intent,
                           );
                       }}
+                      onOpenArtifact={openArtifactFileTab}
                       onCancel={cancelRun}
                     />
                   )}
