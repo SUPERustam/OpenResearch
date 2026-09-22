@@ -6224,16 +6224,20 @@ export function ChatPanel({
                   const remove = () =>
                     setAttachments((cur) => cur.filter((_, j) => j !== i));
                   const label = attachmentLabel(a);
-                  return attachmentIsPdf(a) ? (
+                  return attachmentIsPdf(a) || a.kind === "saved" ? (
                     <div key={a.kind === "saved" ? a.fileName : i} className="attachment-file [&_button]:absolute [&_button]:-top-[5px] [&_button]:-right-[5px] [&_button]:inline-flex [&_button]:items-center [&_button]:justify-center [&_button]:w-4 [&_button]:h-4 [&_button]:p-0 [&_button]:border [&_button]:border-border [&_button]:rounded-full [&_button]:bg-surface [&_button]:text-text [&_button]:cursor-pointer [&_button:hover]:bg-text [&_button:hover]:text-background relative inline-flex items-center gap-2 max-w-55 py-2 px-2.5 border border-border rounded-sm text-text bg-surface [&_svg]:shrink-0 [&_svg]:text-muted" title={label}>
-                      <FileText size={22} />
+                      {attachmentIsPdf(a) ? (
+                        <FileText size={22} />
+                      ) : (
+                        <img src={attachmentPreviewSrc(a)} alt="" className="h-8 w-8 shrink-0 rounded-sm border border-border object-cover" />
+                      )}
                       <span className="attachment-file-name overflow-hidden text-ellipsis whitespace-nowrap text-sm">{label ?? "document.pdf"}</span>
-                      <button title={m.chat_panel_remove_file()} aria-label={m.chat_panel_remove_file()} onClick={remove}>
+                      <button title={attachmentIsPdf(a) ? m.chat_panel_remove_file() : m.chat_panel_remove_image()} aria-label={attachmentIsPdf(a) ? m.chat_panel_remove_file() : m.chat_panel_remove_image()} onClick={remove}>
                         <X size={11} />
                       </button>
                     </div>
                   ) : (
-                    <div key={a.kind === "saved" ? a.fileName : i} className="attachment-thumb relative [&_img]:w-13 [&_img]:h-13 [&_img]:object-cover [&_img]:border [&_img]:border-border [&_img]:rounded-sm [&_img]:block [&_button]:absolute [&_button]:-top-[5px] [&_button]:-right-[5px] [&_button]:inline-flex [&_button]:items-center [&_button]:justify-center [&_button]:w-4 [&_button]:h-4 [&_button]:p-0 [&_button]:border [&_button]:border-border [&_button]:rounded-full [&_button]:bg-surface [&_button]:text-text [&_button]:cursor-pointer [&_button:hover]:bg-text [&_button:hover]:text-background">
+                    <div key={i} className="attachment-thumb relative [&_img]:w-13 [&_img]:h-13 [&_img]:object-cover [&_img]:border [&_img]:border-border [&_img]:rounded-sm [&_img]:block [&_button]:absolute [&_button]:-top-[5px] [&_button]:-right-[5px] [&_button]:inline-flex [&_button]:items-center [&_button]:justify-center [&_button]:w-4 [&_button]:h-4 [&_button]:p-0 [&_button]:border [&_button]:border-border [&_button]:rounded-full [&_button]:bg-surface [&_button]:text-text [&_button]:cursor-pointer [&_button:hover]:bg-text [&_button:hover]:text-background">
                       <img src={attachmentPreviewSrc(a)} alt={m.chat_pasted_image()} />
                       <button title={m.chat_panel_remove_image()} aria-label={m.chat_panel_remove_image()} onClick={remove}>
                         <X size={11} />

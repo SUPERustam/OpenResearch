@@ -105,6 +105,7 @@ pub enum HomeView {
     Experiments,
     Files,
     Artifacts,
+    Attachments,
     Terminal,
 }
 
@@ -366,6 +367,11 @@ mod tests {
             urlencoding::encode(&pane.to_string())
         );
         assert!(valid_location(&location));
+        let attachments = json!({"kind":"home","view":"attachments"});
+        assert!(valid_location(&format!(
+            "/projects/demo/tasks/new?pane={}",
+            urlencoding::encode(&attachments.to_string())
+        )));
         assert!(valid_location("/projects/demo/settings/%67it"));
         assert!(valid_location(&format!(
             "/projects/demo/tasks/new?%70ane={}&",
