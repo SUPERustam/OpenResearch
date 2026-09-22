@@ -5334,10 +5334,18 @@ async fn set_ui_state(Json(req): Json<SetUiStateReq>) -> ApiResult {
 fn lit_sources_json() -> Value {
     let disabled = crate::config::disabled_lit_sources();
     let enabled = |name: &str| !disabled.iter().any(|d| d == name);
+    let key_set = |name: &str| crate::config::lit_api_key(name).is_some();
     json!({
         "alphaxiv": enabled(crate::LitSource::Alphaxiv.as_str()),
         "openalex": enabled(crate::LitSource::Openalex.as_str()),
         "biorxiv": enabled(crate::LitSource::Biorxiv.as_str()),
+        "lacuna": enabled(crate::LitSource::Lacuna.as_str()),
+        "keenable": enabled(crate::LitSource::Keenable.as_str()),
+        "asta": enabled(crate::LitSource::Asta.as_str()),
+        "scispace": enabled(crate::LitSource::Scispace.as_str()),
+        "astaKeySet": key_set("ASTA_API_KEY"),
+        "keenableKeySet": key_set("KEENABLE_API_KEY"),
+        "scispaceKeySet": key_set("SCISPACE_API_KEY"),
     })
 }
 
@@ -5348,19 +5356,53 @@ async fn lit_sources_settings() -> ApiResult {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SetLitSourcesReq {
     alphaxiv: bool,
     openalex: bool,
     biorxiv: bool,
+    lacuna: bool,
+    keenable: bool,
+    asta: bool,
+    scispace: bool,
+    /// `Some("")` clears the key. `None` leaves the saved key alone.
+    #[serde(default)]
+    asta_key: Option<String>,
+    #[serde(default)]
+    keenable_key: Option<String>,
+    #[serde(default)]
+    scispace_key: Option<String>,
+}
+
+fn store_lit_key(name: &str, value: Option<String>) -> Result<(), ApiError> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        crate::config::remove_synced_env_var(name)
+            .map_err(|e| ApiError::from(anyhow!("could not clear {name}: {e}")))?;
+    } else {
+        crate::config::write_synced_env_var(name, value)
+            .map_err(|e| ApiError::from(anyhow!("could not save {name}: {e}")))?;
+    }
+    Ok(())
 }
 
 async fn set_lit_sources_settings(Json(req): Json<SetLitSourcesReq>) -> ApiResult {
     tokio::task::spawn_blocking(move || {
+        store_lit_key("ASTA_API_KEY", req.asta_key)?;
+        store_lit_key("KEENABLE_API_KEY", req.keenable_key)?;
+        store_lit_key("SCISPACE_API_KEY", req.scispace_key)?;
         let mut disabled = Vec::new();
         for (enabled, source) in [
             (req.alphaxiv, crate::LitSource::Alphaxiv),
             (req.openalex, crate::LitSource::Openalex),
             (req.biorxiv, crate::LitSource::Biorxiv),
+            (req.lacuna, crate::LitSource::Lacuna),
+            (req.keenable, crate::LitSource::Keenable),
+            (req.asta, crate::LitSource::Asta),
+            (req.scispace, crate::LitSource::Scispace),
         ] {
             if !enabled {
                 disabled.push(source.as_str().to_string());

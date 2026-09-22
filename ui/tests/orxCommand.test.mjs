@@ -151,6 +151,23 @@ test("paper discovery commands expose their strategy and query", () => {
     strategy: "biorxiv",
     query: "single-cell atlas",
   });
+  assert.deepEqual(parseOrxLit('orx discover lacuna "attention" --kind direction'), {
+    kind: "discover",
+    source: "lacuna",
+    strategy: "lacuna",
+    query: "attention",
+  });
+  assert.deepEqual(parseOrxLit('orx discover keenable "transformer survey"'), {
+    kind: "discover",
+    source: "keenable",
+    strategy: "keenable",
+    query: "transformer survey",
+  });
+  assert.deepEqual(parseOrxLit('orx paper "https://lacuna.tiptreesystems.com/work/attention/wrk_abc"'), {
+    kind: "paper",
+    source: "lacuna",
+    id: "https://lacuna.tiptreesystems.com/work/attention/wrk_abc",
+  });
 });
 
 test("paper parsing remains intact", () => {

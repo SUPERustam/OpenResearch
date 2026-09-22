@@ -99,15 +99,19 @@ group below has a module (`orx skill <name>`) with the full flags and rules.
 To **read or edit** a node's code—including diffing what a run changed—use plain
 Git in the local session worktree. See the `orx-git` module.
 
-### Literature & papers — alphaXiv / OpenAlex / bioRxiv (no login required) — module `orx-lit-review`
-Use before any web search for academic/research queries (paper, author, blog, model release).
+### Literature & papers — module `orx-lit-review`
+Use enabled Data sources before any ad-hoc web search for academic queries. alphaXiv, OpenAlex, bioRxiv, and Lacuna need no login. Asta needs `ASTA_API_KEY`. SciSpace stays unavailable until its API schema is published. Keenable is the web fallback.
 | Command | What it does |
 |---|---|
 | `orx discover keyword "<query>"` | Call the alphaXiv full-text retrieval primitive with match snippets. |
 | `orx discover embedding "<query>"` | Call the alphaXiv semantic retrieval primitive. The main agent ranks candidates and decides focused follow-ups; see `orx-lit-review`. |
 | `orx discover openalex "<query>"` | Search the cross-disciplinary OpenAlex scholarly graph. |
 | `orx discover biorxiv "<query>"` | Search bioRxiv preprints through OpenAlex's bioRxiv index. |
-| `orx paper <id\|url> [--source ...] [--full]` | Fetch a paper: alphaXiv report with automatic full-text fallback (`--full` forces raw text), or OpenAlex/bioRxiv metadata+abstract. Source auto-detected from the id. |
+| `orx discover lacuna "<query>" [--kind paper\|direction\|hypothesis]` | Search the Lacuna ML research map. |
+| `orx discover asta "<query>"` | Search Semantic Scholar through the Asta MCP tools. |
+| `orx discover keenable "<query>"` | Web search fallback via Keenable. |
+| `orx discover scispace "<query>"` | Reserved for SciSpace. Refuses while the public API schema is unpublished. |
+| `orx paper <id\|url> [--source ...] [--full]` | Fetch a paper or, with `--source keenable`, a web page. Source auto-detected from the id. |
 
 ### Skills & templates — module `orx-customize`
 | Command | What it does |

@@ -21,6 +21,7 @@ mod error;
 mod folder_picker;
 mod invocation;
 mod jobs;
+mod lit_connectors;
 // Local mode (`orx up`): builds out across stages; not all of it is wired yet.
 #[allow(dead_code)]
 mod local;
@@ -652,6 +653,14 @@ pub enum LitSource {
     Openalex,
     /// bioRxiv biology preprints (searched via OpenAlex, fetched via bioRxiv).
     Biorxiv,
+    /// Lacuna ML research map (papers, directions, hypotheses).
+    Lacuna,
+    /// Keenable web search. Page reads use an explicit `--source keenable`.
+    Keenable,
+    /// Ai2 Asta / Semantic Scholar corpus. Tool calls need `ASTA_API_KEY`.
+    Asta,
+    /// SciSpace. Listed so it can be toggled; search waits on a published API.
+    Scispace,
 }
 
 impl LitSource {
@@ -663,6 +672,10 @@ impl LitSource {
             LitSource::Alphaxiv => "alphaxiv",
             LitSource::Openalex => "openalex",
             LitSource::Biorxiv => "biorxiv",
+            LitSource::Lacuna => "lacuna",
+            LitSource::Keenable => "keenable",
+            LitSource::Asta => "asta",
+            LitSource::Scispace => "scispace",
         }
     }
 
@@ -672,7 +685,31 @@ impl LitSource {
             LitSource::Alphaxiv => "alphaXiv",
             LitSource::Openalex => "OpenAlex",
             LitSource::Biorxiv => "bioRxiv",
+            LitSource::Lacuna => "Lacuna",
+            LitSource::Keenable => "Keenable",
+            LitSource::Asta => "Asta",
+            LitSource::Scispace => "SciSpace",
         }
+    }
+
+    /// Every source the Data sources menu can toggle, in menu order.
+    pub fn all() -> &'static [LitSource] {
+        &[
+            LitSource::Alphaxiv,
+            LitSource::Openalex,
+            LitSource::Biorxiv,
+            LitSource::Lacuna,
+            LitSource::Keenable,
+            LitSource::Asta,
+            LitSource::Scispace,
+        ]
+    }
+
+    /// Keyed sources that stay off until the user saves a Data sources choice.
+    /// An empty disable-list still means the original sources (and other
+    /// keyless additions) are on.
+    pub fn default_off() -> &'static [LitSource] {
+        &[LitSource::Asta, LitSource::Scispace]
     }
 }
 
@@ -692,6 +729,14 @@ pub enum DiscoverCommand {
     Openalex(DiscoverySearchArgs),
     /// bioRxiv preprint search through OpenAlex's bioRxiv source index.
     Biorxiv(DiscoverySearchArgs),
+    /// Lacuna ML research map (papers, directions, or hypotheses).
+    Lacuna(DiscoverySearchArgs),
+    /// Keenable web search. Use only as a fallback when scholarly sources are thin.
+    Keenable(DiscoverySearchArgs),
+    /// Ai2 Asta relevance search over the Semantic Scholar corpus.
+    Asta(DiscoverySearchArgs),
+    /// SciSpace literature search. Refuses until SciSpace publishes an API schema.
+    Scispace(DiscoverySearchArgs),
 }
 
 #[derive(Args, Debug)]
@@ -711,6 +756,10 @@ pub struct DiscoverySearchArgs {
     /// Maximum results to emit (default 15). alphaXiv uses its fixed server-side candidate pool.
     #[arg(long, default_value_t = 15, value_parser = clap::value_parser!(u32).range(1..=200))]
     pub limit: u32,
+    /// Lacuna record kind: `paper` (default), `direction`, or `hypothesis`.
+    /// Other discovery sources ignore this flag.
+    #[arg(long, default_value = "paper")]
+    pub kind: String,
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -1207,6 +1256,10 @@ mod cli_tests {
             let actual = match command {
                 DiscoverCommand::Openalex(_) => LitSource::Openalex,
                 DiscoverCommand::Biorxiv(_) => LitSource::Biorxiv,
+                DiscoverCommand::Lacuna(_) => LitSource::Lacuna,
+                DiscoverCommand::Keenable(_) => LitSource::Keenable,
+                DiscoverCommand::Asta(_) => LitSource::Asta,
+                DiscoverCommand::Scispace(_) => LitSource::Scispace,
                 _ => panic!("expected non-alphaXiv discovery source"),
             };
             assert_eq!(actual, expected);

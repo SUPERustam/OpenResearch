@@ -1194,5 +1194,22 @@
   "onboarding_choose_another_agent": "दूसरा कोडिंग एजेंट चुनें",
   "image_zoom_out": "ज़ूम आउट",
   "image_zoom_in": "ज़ूम इन",
-  "image_zoom_reset": "फ़िट करने के लिए ज़ूम रीसेट करें"
+  "image_zoom_reset": "फ़िट करने के लिए ज़ूम रीसेट करें",
+  "lit_sources_group_builtin": "OpenResearch में पहले से",
+  "lit_sources_group_more": "और साहित्य उपकरण",
+  "lit_sources_hint_alphaxiv": "arXiv पेपर",
+  "lit_sources_hint_openalex": "सभी विषय",
+  "lit_sources_hint_biorxiv": "जीवविज्ञान प्रीप्रिंट",
+  "lit_sources_hint_lacuna": "एमएल शोध मानचित्र",
+  "lit_sources_key_required": "API कुंजी ज़रूरी है",
+  "lit_sources_key_optional": "वैकल्पिक API कुंजी",
+  "lit_sources_key_saved": "API कुंजी सहेजी गई",
+  "lit_sources_add_key": "API कुंजी जोड़ें",
+  "lit_sources_replace_key": "API कुंजी बदलें",
+  "lit_sources_save_key": "सहेजें",
+  "lit_sources_key_placeholder": "API कुंजी चिपकाएँ",
+  "activity_searched_lacuna": "Lacuna खोजा",
+  "activity_searched_keenable": "Keenable से वेब खोजा",
+  "activity_searched_asta": "Asta खोजा",
+  "activity_searched_scispace": "SciSpace खोजा"
 }

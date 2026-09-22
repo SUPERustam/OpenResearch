@@ -1356,12 +1356,25 @@ export interface LitSourcesSettings {
   alphaxiv: boolean;
   openalex: boolean;
   biorxiv: boolean;
+  lacuna: boolean;
+  keenable: boolean;
+  asta: boolean;
+  scispace: boolean;
+  astaKeySet: boolean;
+  keenableKeySet: boolean;
+  scispaceKeySet: boolean;
+}
+
+export interface LitSourcesUpdate extends LitSourcesSettings {
+  astaKey?: string;
+  keenableKey?: string;
+  scispaceKey?: string;
 }
 
 export const getLitSources = (signal?: AbortSignal) =>
   get<LitSourcesSettings>("/api/settings/lit-sources", signal);
 
-export const setLitSources = (body: LitSourcesSettings) =>
+export const setLitSources = (body: LitSourcesUpdate) =>
   post<LitSourcesSettings>("/api/settings/lit-sources", body);
 
 export interface ProjectDefaultsSettings {

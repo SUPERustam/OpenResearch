@@ -1194,5 +1194,22 @@
   "onboarding_choose_another_agent": "اختيار وكيل برمجة آخر",
   "image_zoom_out": "تصغير",
   "image_zoom_in": "تكبير",
-  "image_zoom_reset": "إعادة ضبط التكبير للملاءمة"
+  "image_zoom_reset": "إعادة ضبط التكبير للملاءمة",
+  "lit_sources_group_builtin": "مستخدمة في OpenResearch",
+  "lit_sources_group_more": "أدوات أدبيات إضافية",
+  "lit_sources_hint_alphaxiv": "أوراق arXiv",
+  "lit_sources_hint_openalex": "كل التخصصات",
+  "lit_sources_hint_biorxiv": "مسودات علم الأحياء",
+  "lit_sources_hint_lacuna": "خريطة أبحاث تعلم الآلة",
+  "lit_sources_key_required": "مفتاح API مطلوب",
+  "lit_sources_key_optional": "مفتاح API اختياري",
+  "lit_sources_key_saved": "تم حفظ مفتاح API",
+  "lit_sources_add_key": "إضافة مفتاح API",
+  "lit_sources_replace_key": "استبدال مفتاح API",
+  "lit_sources_save_key": "حفظ",
+  "lit_sources_key_placeholder": "الصق مفتاح API",
+  "activity_searched_lacuna": "بحث في Lacuna",
+  "activity_searched_keenable": "بحث في الويب عبر Keenable",
+  "activity_searched_asta": "بحث في Asta",
+  "activity_searched_scispace": "بحث في SciSpace"
 }

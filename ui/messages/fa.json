@@ -1194,5 +1194,22 @@
   "onboarding_choose_another_agent": "انتخاب یک عامل برنامه‌نویسی دیگر",
   "image_zoom_out": "کوچک‌نمایی",
   "image_zoom_in": "بزرگ‌نمایی",
-  "image_zoom_reset": "بازنشانی بزرگ‌نمایی برای جا شدن"
+  "image_zoom_reset": "بازنشانی بزرگ‌نمایی برای جا شدن",
+  "lit_sources_group_builtin": "از قبل در OpenResearch",
+  "lit_sources_group_more": "ابزارهای بیشتر ادبیات",
+  "lit_sources_hint_alphaxiv": "مقاله‌های arXiv",
+  "lit_sources_hint_openalex": "همه رشته‌ها",
+  "lit_sources_hint_biorxiv": "پیش‌چاپ‌های زیست‌شناسی",
+  "lit_sources_hint_lacuna": "نقشه پژوهش یادگیری ماشین",
+  "lit_sources_key_required": "کلید API لازم است",
+  "lit_sources_key_optional": "کلید API اختیاری",
+  "lit_sources_key_saved": "کلید API ذخیره شد",
+  "lit_sources_add_key": "افزودن کلید API",
+  "lit_sources_replace_key": "جایگزینی کلید API",
+  "lit_sources_save_key": "ذخیره",
+  "lit_sources_key_placeholder": "کلید API را بچسبانید",
+  "activity_searched_lacuna": "Lacuna جست‌وجو شد",
+  "activity_searched_keenable": "وب با Keenable جست‌وجو شد",
+  "activity_searched_asta": "Asta جست‌وجو شد",
+  "activity_searched_scispace": "SciSpace جست‌وجو شد"
 }
