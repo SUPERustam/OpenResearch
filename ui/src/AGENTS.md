@@ -22,8 +22,8 @@ Shared pieces:
 
 Wire it on **all four** Logs/Code neighbors:
 
-- `components/TreeView.tsx` (`ExpNode`, `NODE_W = 304`, `NODE_H = 132`)
-- `components/ExpHoverCard.tsx`
+- `components/TreeView.tsx` (`ExpNode`; preserve its fixed-size layout)
+- `components/ExpHoverCard.tsx` (delegates through `onOpenArtifacts` to the tree's menu)
 - `components/ExperimentOverview.tsx` (via `DetailDrawer`)
 - `components/ExperimentsTable.tsx`
 
@@ -35,8 +35,8 @@ Against **top-level** project artifact entries only:
 
 1. Exact `name === exp.slug` (file or folder) wins.
 2. Else a **unique** top-level `slug-…`, or file stem equals / starts with `slug-`.
-3. Else a **unique** top-level name sharing **≥ 2** hyphen-separated tokens with the slug (demo: `cpu-apple-silicon-pipeline-results.md` ↔ `cpu-apple-silicon-end-to-end-baseline`).
-4. Ambiguous or none → `[]`. **Never** return the rest of the project.
+3. If step 2 has no candidates, accept a **unique** top-level stem sharing **≥ 2 leading** hyphen-separated tokens with the slug (demo: `cpu-apple-silicon-pipeline-results.md` ↔ `cpu-apple-silicon-end-to-end-baseline`). Multiple candidates in step 2 fail immediately; do not fall through.
+4. Ambiguous or none → `null` from the matcher, `[]` from `experimentArtifactFiles`. **Never** return the rest of the project.
 
 A matched folder is flattened; nested paths are relative to that folder. Always show the Artifacts button. Empty copy is `tree_view_no_matching_artifacts` (**No matching artifacts**). Logs may hide when there are 0 runs; Code and Artifacts stay.
 

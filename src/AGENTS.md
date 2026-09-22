@@ -9,12 +9,12 @@ Binary name `orx` (`src/main.rs`). Crate name `openresearch-cli`.
 | `commands/` | CLI subcommands and `orx up` HTTP. See [`commands/AGENTS.md`](commands/AGENTS.md). |
 | `local/` | Local store, artifacts FS, harnesses, demo, playbook. See [`local/AGENTS.md`](local/AGENTS.md). |
 | `jobs/` | Compute backends orx launches itself (SSH, Slurm, HF, Modal, K8s, Ray, Tinker, local). |
-| `client.rs` | HTTP client for **openresearch.sh** APIs only (orgs, instances, managed compute). |
+| `client.rs` | Hosted API client (orgs, instances, managed compute) and literature services (alphaXiv, arXiv, OpenAlex). |
 | `store.rs` | SQLite + run-log paths. Data dir: `$ORX_DATA_DIR`, else settings, else XDG/`~/.local/share/openresearch`. |
 | `telemetry.rs` | Opt-out analytics. Source builds must stay `development` channel and must not send production telemetry. |
 | `compute.rs`, `plane/`, `remote.rs` | Remote/runtime wiring. |
 
-`local/` must not call `client.rs` except `local/openresearch.rs` (managed boxes). Project/experiment/run rows always live in the local store.
+Project/experiment/run rows always live in the local store. Keep hosted calls limited to service-owned capabilities; existing `local/` callers include `openresearch.rs` (managed boxes), `ssh_identity.rs` (registered SSH keys), and `starter.rs` (paper context).
 
 ## Build / test
 

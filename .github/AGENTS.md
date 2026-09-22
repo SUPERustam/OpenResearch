@@ -2,15 +2,17 @@
 
 Authoritative PR checks: `workflows/ci.yml`.
 
-On Ubuntu, in order: i18n → styles → `scripts/dev-slot.test.mjs` → pnpm install/paraglide → UI typecheck → UI unit tests → Rust fmt → clippy → `cargo build --locked` → assert source builds are `development` channel → `cargo test --locked`.
+Ubuntu checks localization, styles, dev-slot tests, UI typecheck/unit tests, and Rust fmt/clippy/build/test. It builds both debug and release binaries and verifies both report the `development` channel. CI uses Node 22 and pnpm 10; exact commands and ordering live in `workflows/ci.yml`.
 
-Windows job: clippy, build, test (no Node; `ui/dist` is committed).
+Windows runs clippy/build/test without Node (`ui/dist` is committed), plus a release executable upload outside reusable release calls. CI does not regenerate `ui/dist`; UI changes must include a local build.
 
 ## Rules that GitHub settings must keep
 
 - Required checks: `fmt, clippy, test` and `version sanity`, including for administrators.
 - No merge queue. Do not require branches to be up to date.
 - `pull_request` CI must test the merge ref (`actions/checkout` default), not the PR head alone.
+
+These are required policies, not proof of live GitHub settings. CI also runs on `main`; new commits on `main` do not automatically rerun every open PR's merge candidate.
 
 Releases call this same CI workflow on the packaged commit. When regenerating cargo-dist release workflow, keep `./ci` in `global-artifacts-jobs`.
 

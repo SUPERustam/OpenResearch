@@ -1,11 +1,11 @@
 # Local mode (`src/local/`)
 
-Projects, experiments, chats, and runs for `orx up`. Nothing here calls the hosted OpenResearch API except `openresearch.rs` (managed compute). IDs resolve only when the row exists in the local store.
+Projects, experiments, chats, and runs for `orx up` live in the local store; IDs resolve only when the row exists there. Hosted integrations include `openresearch.rs` (managed compute), `ssh_identity.rs` (registered SSH keys), and `starter.rs` (paper context through the literature client).
 
 ## Artifacts (`files.rs`)
 
 - Disk: `<data dir>/files/<project slug>/`. Product name is Artifacts; physical dir stays `files/` (legacy `artifacts/` is migrated only when `files/` is missing).
-- Filesystem is the source of truth: no DB registry, no upload step. Cap ~2000 entries.
+- Filesystem is the source of truth: no DB registry, no upload step. Listings are capped at 2000 entries (`MAX_ENTRIES`).
 - `files_dir_display` must stay the un-canonicalized path so chat `<file path="artifacts/…">` prefix matching works on symlinked data dirs (`/tmp` → `/private/tmp`).
 - Containment: `is_safe_rel_path` + `resolve_contained`. Do not serve paths outside the project dir.
 
@@ -18,12 +18,12 @@ Agents are told to group durable outputs under topic/experiment folders (see `ag
 
 ## Demo seed (`demo.rs`)
 
-First-run **nanochat** project (`PROJECT_SLUG = "nanochat"`). Baseline experiment slug/branch uses `cpu-apple-silicon-end-to-end-baseline`. Artifact names like `cpu-apple-silicon-pipeline-results.md` only match via the **two-token hyphen prefix** rule. Embedded sources come from `demo/nanochat/`.
+First-run **nanochat** project (preferred slug `nanochat`; collisions use a fallback). Embedded sources come from `demo/nanochat/`. See [`demo/AGENTS.md`](../../demo/AGENTS.md) for evidence and artifact-matcher fixtures.
 
 ## OpenCode runtime
 
 - `opencode.rs` / `opencode_runtime.rs` / `opencode_db.rs`: spawn `opencode serve`, V1 vs V2 DB, binary resolve.
-- Install location agents see: `~/.opencode/bin/opencode`. Current installs are V2; see [`harness/AGENTS.md`](harness/AGENTS.md).
+- Common install location: `~/.opencode/bin/opencode`. Detect the installed protocol; see [`harness/AGENTS.md`](harness/AGENTS.md).
 
 ## Python / worktrees
 

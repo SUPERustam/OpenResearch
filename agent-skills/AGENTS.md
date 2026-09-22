@@ -4,7 +4,7 @@ Canonical `SKILL.md` packages installed into session worktrees (`src/local/agent
 
 ## Artifact layout (the dashboard matcher depends on this)
 
-`orx-reports` tells research agents to write durable outputs into the playbook `{artifacts}` directory, grouped by topic — typically a **folder named like the experiment slug**:
+`orx-reports` tells research agents to write durable outputs into the playbook `{artifacts}` directory, following existing organization and grouping by topic or deliverable. For new experiment-specific outputs, a **folder named like the experiment slug** gives the dashboard an exact match:
 
 ```text
 <artifacts-dir>/
@@ -14,7 +14,7 @@ Canonical `SKILL.md` packages installed into session worktrees (`src/local/agent
     figures/loss.pdf
 ```
 
-Do not change that convention without updating `ui/src/experimentArtifacts.ts` and its tests. Chat citations use `<file path="artifacts/<relative-path>" />` (see repo-root `SYSTEM_PROMPT.md`).
+Preserve existing published paths. Coordinate changes to experiment matching with `ui/src/experimentArtifacts.ts` and its tests. Chat citations use `<file path="artifacts/<relative-path>" />` (see repo-root `SYSTEM_PROMPT.md`).
 
 `orx-figures` is required before plotting; default matplotlib output is not acceptable in reports.
 

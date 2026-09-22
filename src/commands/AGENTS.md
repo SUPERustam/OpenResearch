@@ -15,7 +15,7 @@ pub async fn run(args: crate::<Args>) -> crate::error::Result<()>
 One axum process on loopback:
 
 - `/` — embedded SPA (`ui/dist`)
-- `/api/*` — local SQLite + run logs + artifacts
+- `/api/*` — local research data and dashboard integrations/settings (including hosted capabilities where applicable)
 - `/api/events` — SSE
 
 Artifact routes (project-scoped, filesystem is source of truth):
@@ -30,7 +30,7 @@ Harness picker / first-run install: `up/harness_setup.rs` plus `GET /api/harness
 ## Live dashboard flags agents actually use
 
 ```sh
-./target/debug/orx --no-telemetry up --no-browser --no-agent --port 4791
+ORX_DATA_DIR=/absolute/path/to/disposable-data ./target/debug/orx --no-telemetry up --no-browser --no-agent --port 4791
 ```
 
-Set `ORX_DATA_DIR` (and prefer `scripts/dev-slot.mjs`) so you do not clobber the user’s real store. Seed projects with `POST /api/projects` plus `orx experiment` / the dashboard; write files under `$ORX_DATA_DIR/files/<project-slug>/`.
+Prefer `scripts/dev-slot.mjs` for local work; the direct command above shows the flags and requires replacing the placeholder with a disposable directory. `ORX_DATA_DIR` alone does not isolate config/cache. Seed projects with `POST /api/projects`, then add nodes with `orx create-experiment` or the dashboard; `orx exp` operates on existing nodes. Write files under `<data dir>/files/<project-slug>/`.

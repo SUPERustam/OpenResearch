@@ -20,21 +20,23 @@ Canonical list is `project.inlang/settings.json`: **`en`**, **`zh-CN`**, **`fa`*
 ## Tests and typecheck
 
 ```sh
+pnpm install --frozen-lockfile
+pnpm exec paraglide-js compile --silent --emit-ts-declarations
 pnpm typecheck          # regenerates TanStack routes, then tsc
-pnpm test               # node --test ui/tests/*.test.mjs
+pnpm test              # node --test --experimental-strip-types tests/*.test.mjs
 ```
 
-CI runs `node --test --experimental-strip-types ui/tests/*.test.mjs` from the repo root. Put unit tests next to the helper they cover (for example `tests/experimentArtifacts.test.mjs`).
+Run these commands in `ui/`. Generate Paraglide messages before standalone typechecking on a fresh checkout. Unit tests live in `ui/tests/`, separate from source helpers (for example `tests/experimentArtifacts.test.mjs`).
 
-## `dist/` is source of truth for the binary
+## Embedded build (`dist/`)
 
-`orx up` serves `ui/dist` through rust-embed. After any UI change:
+`src/` is the editable source; `orx up` embeds generated `ui/dist` through rust-embed. After changes to dashboard source, catalogs, or build inputs:
 
 ```sh
 pnpm build              # i18n + paraglide + typecheck + vite
 ```
 
-Commit the regenerated `dist/` assets. Skipping this ships a stale dashboard.
+Commit the regenerated `dist/` assets and rebuild the Rust binary to verify its embedded dashboard. `pnpm build` does not run the style check or unit tests; run those separately. Guide-only edits do not require rebuilding assets.
 
 ## Do not
 
