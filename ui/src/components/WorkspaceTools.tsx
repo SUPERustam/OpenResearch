@@ -4,7 +4,7 @@ import { statusLabel } from "./StatusBadge";
 import { getComputeSettingsQuery } from "../queries/settings";
 import { TARGET_LABELS } from "../computeTargets";
 import { useEffect, useMemo, useRef } from "react";
-import { FlaskConical, FolderOpen, Package, GitBranch, Cpu, Terminal } from "lucide-react";
+import { FlaskConical, FolderOpen, Package, Paperclip, GitBranch, Cpu, Terminal } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { getSessionWorktreeQuery } from "../queries/files";
 import { countChanges, parseDiffFiles } from "./GitDiff";
@@ -12,13 +12,13 @@ import { m } from "../paraglide/messages.js";
 import { BackendLogo } from "./BackendLogos";
 import { IconButton, MenuItem, StatusIndicator } from "./ui";
 
-export function WorkspaceTools({ expanded, experiments, runs, onOpenExperiment, rightOffset, activeView, projectId, onCompute, sessionId, busy, onChanges, onFiles, onTerminal, onArtifacts, onExperiments }: {
+export function WorkspaceTools({ expanded, experiments, runs, onOpenExperiment, rightOffset, activeView, projectId, onCompute, sessionId, busy, onChanges, onFiles, onTerminal, onArtifacts, onAttachments, onExperiments }: {
   expanded: boolean;
   experiments: Experiment[];
   runs: Run[];
   onOpenExperiment: (id: string, runId: string) => void;
   rightOffset?: number;
-  activeView: "files" | "artifacts" | "experiments" | "terminal" | null;
+  activeView: "files" | "artifacts" | "attachments" | "experiments" | "terminal" | null;
   projectId: string;
   onCompute: () => void;
   sessionId: string | null;
@@ -27,6 +27,7 @@ export function WorkspaceTools({ expanded, experiments, runs, onOpenExperiment, 
   onFiles: () => void;
   onTerminal: () => void;
   onArtifacts: () => void;
+  onAttachments: () => void;
   onExperiments: () => void;
 }) {
   const experimentRows = activeWorkspaceRuns(experiments, runs, sessionId);
@@ -37,6 +38,7 @@ export function WorkspaceTools({ expanded, experiments, runs, onOpenExperiment, 
     { id: "files", label: m.app_files(), Icon: FolderOpen, onClick: onFiles },
     { id: "terminal", label: m.workspace_terminal(), Icon: Terminal, onClick: onTerminal },
     { id: "artifacts", label: m.app_artifacts(), Icon: Package, onClick: onArtifacts },
+    { id: "attachments", label: m.app_attachments(), Icon: Paperclip, onClick: onAttachments },
     { id: "experiments", label: m.app_experiments(), Icon: FlaskConical, onClick: onExperiments },
   ];
   return (

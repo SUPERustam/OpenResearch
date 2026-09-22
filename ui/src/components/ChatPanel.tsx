@@ -16,6 +16,7 @@ import {
   getSkillsQuery,
 } from "../queries/settings";
 import { listChatSessionsQuery, getChatMessagesQuery } from "../queries/chat";
+import { onUseChatAttachment, type SavedChatAttachmentRef } from "../chatAttachmentBridge";
 import { getProjectStarterPromptsQuery } from "../queries/projects";
 import { m } from "../paraglide/messages.js";
 import { autoDir, ltr } from "../i18n";
@@ -4091,6 +4092,49 @@ const STARTER_TONES = [
 const STARTER_GRID_CLASS =
   "mt-7 grid w-full max-w-readable grid-cols-1 gap-3 sm:grid-cols-2";
 
+/** A file waiting in the composer: a fresh upload, or one already saved by an earlier chat. */
+type ComposerAttachment =
+  | { kind: "upload"; dataUrl: string; mediaType: string; name?: string; size: number }
+  | { kind: "saved"; fileName: string; displayName: string; mediaType: string; size: number };
+
+function attachmentIsPdf(attachment: ComposerAttachment): boolean {
+  return attachment.mediaType === "application/pdf";
+}
+
+function attachmentLabel(attachment: ComposerAttachment): string | undefined {
+  return attachment.kind === "upload" ? attachment.name : attachment.displayName;
+}
+
+function attachmentPreviewSrc(attachment: ComposerAttachment): string {
+  return attachment.kind === "upload" ? attachment.dataUrl : chatAttachmentUrl(attachment.fileName);
+}
+
+function savedAttachment(attachment: SavedChatAttachmentRef): ComposerAttachment {
+  return {
+    kind: "saved",
+    fileName: attachment.fileName,
+    displayName: attachment.displayName,
+    mediaType: attachment.mediaType,
+    size: attachment.size,
+  };
+}
+
+function composerImages(pending: ComposerAttachment[]): ChatImageAttachment[] {
+  return pending.flatMap((attachment) =>
+    attachment.kind === "upload"
+      ? [{
+        mediaType: attachment.mediaType,
+        dataBase64: attachment.dataUrl.slice(attachment.dataUrl.indexOf(",") + 1),
+        name: attachment.name,
+      }]
+      : [],
+  );
+}
+
+function composerExistingFiles(pending: ComposerAttachment[]): string[] {
+  return pending.flatMap((attachment) => attachment.kind === "saved" ? [attachment.fileName] : []);
+}
+
 export function ChatPanel({
   projectId,
   projectName,
@@ -4218,9 +4262,9 @@ export function ChatPanel({
     composerScopeRef.current = { projectId, activeId, mainView };
   }
   // Pasted/dropped/uploaded attachments waiting in the composer, as data URLs.
-  const [attachments, setAttachments] = useState<
-    { dataUrl: string; mediaType: string; name?: string; size: number }[]
-  >([]);
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
   const [attachError, setAttachError] = useState<string | null>(null);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const settingsMutationTail = useRef<Promise<void>>(Promise.resolve());
@@ -4268,6 +4312,18 @@ export function ChatPanel({
   const stickToBottom = useRef(true);
   const [transcriptAtBottom, setTranscriptAtBottom] = useState(true);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => onUseChatAttachment((attachment) => {
+    const current = attachmentsRef.current;
+    if (current.some((item) => item.kind === "saved" && item.fileName === attachment.fileName)) {
+      return false;
+    }
+    const next = [...current, savedAttachment(attachment)];
+    attachmentsRef.current = next;
+    setAttachments(next);
+    setAttachError(null);
+    composerRef.current?.focus();
+    return true;
+  }), []);
   const dataSources = usePopover();
   const addTranscriptSelection = useCallback((selection: Pick<SelectionAction, "text" | "range">) => {
     annotationId.current += 1;
@@ -4343,7 +4399,7 @@ export function ChatPanel({
     const MAX_BYTES = 30 * 1024 * 1024;
     const TOTAL_BYTES = 40 * 1024 * 1024;
     setAttachError(null);
-    let total = attachments.reduce((n, a) => n + a.size, 0);
+    let total = attachments.reduce((n, a) => n + (a.kind === "upload" ? a.size : 0), 0);
     for (const file of files) {
       if (!/^(image\/(png|jpeg|gif|webp)|application\/pdf)$/.test(file.type)) continue;
       if (file.size > MAX_BYTES) {
@@ -4360,7 +4416,7 @@ export function ChatPanel({
         const dataUrl = reader.result as string;
         setAttachments((cur) => [
           ...cur,
-          { dataUrl, mediaType: file.type, name: file.name, size: file.size },
+          { kind: "upload", dataUrl, mediaType: file.type, name: file.name, size: file.size },
         ]);
       };
       reader.readAsDataURL(file);
@@ -5141,11 +5197,9 @@ export function ChatPanel({
     }
     const turnSignature = JSON.stringify({
       text,
-      images: pending.map((attachment) => ({
-        mediaType: attachment.mediaType,
-        name: attachment.name,
-        dataUrl: attachment.dataUrl,
-      })),
+      images: pending.map((attachment) => attachment.kind === "upload"
+        ? { mediaType: attachment.mediaType, name: attachment.name, dataUrl: attachment.dataUrl }
+        : { mediaType: attachment.mediaType, name: attachment.displayName, fileName: attachment.fileName }),
       annotations: wireAnnotations,
       settings: effective
         ? {
@@ -5196,11 +5250,8 @@ export function ChatPanel({
         }
         : {};
       if (inSourceScope()) setSessionOverride({});
-      const images: ChatImageAttachment[] = pending.map((a) => ({
-        mediaType: a.mediaType,
-        dataBase64: a.dataUrl.slice(a.dataUrl.indexOf(",") + 1),
-        name: a.name,
-      }));
+      const images = composerImages(pending);
+      const existingFiles = composerExistingFiles(pending);
       try {
         const sendBusy = () =>
           sendChatMessage(
@@ -5211,6 +5262,7 @@ export function ChatPanel({
             wireAnnotations,
             clientTurnId,
             steering && !queue && !planRequested ? "steer" : undefined,
+            existingFiles.length ? existingFiles : undefined,
           );
         const response = await queueSessionMutation(sendBusy);
         if (response.turn?.existing) await reseedSession(sid);
@@ -5263,7 +5315,9 @@ export function ChatPanel({
         type: "optimisticUser",
         sessionId: sid,
         text: text || m.chat_asked_about_selection(),
-        attachments: pending.map((a) => ({ url: a.dataUrl, mediaType: a.mediaType, name: a.name })),
+        attachments: pending.map((attachment) => attachment.kind === "upload"
+          ? { url: attachment.dataUrl, mediaType: attachment.mediaType, name: attachment.name }
+          : { url: attachment.fileName, mediaType: attachment.mediaType, name: attachment.displayName }),
         annotations: pendingAnnotations,
       });
       dispatch({ type: "busy", sessionId: sid, busy: true });
@@ -5285,11 +5339,8 @@ export function ChatPanel({
         }
         : {};
       if (inSourceScope()) setSessionOverride({});
-      const images: ChatImageAttachment[] = pending.map((a) => ({
-        mediaType: a.mediaType,
-        dataBase64: a.dataUrl.slice(a.dataUrl.indexOf(",") + 1),
-        name: a.name,
-      }));
+      const images = composerImages(pending);
+      const existingFiles = composerExistingFiles(pending);
       const targetSessionId = sid;
       if (!targetSessionId) throw new Error(m.chat_session_not_created());
       const sendTurn = () =>
@@ -5300,6 +5351,8 @@ export function ChatPanel({
           images.length ? images : undefined,
           wireAnnotations,
           clientTurnId,
+          undefined,
+          existingFiles.length ? existingFiles : undefined,
         );
       const response = await queueSessionMutation(sendTurn);
       if (response.turn?.existing) await reseedSession(targetSessionId);
@@ -6170,17 +6223,22 @@ export function ChatPanel({
                 {attachments.map((a, i) => {
                   const remove = () =>
                     setAttachments((cur) => cur.filter((_, j) => j !== i));
-                  return a.mediaType === "application/pdf" ? (
-                    <div key={i} className="attachment-file [&_button]:absolute [&_button]:-top-[5px] [&_button]:-right-[5px] [&_button]:inline-flex [&_button]:items-center [&_button]:justify-center [&_button]:w-4 [&_button]:h-4 [&_button]:p-0 [&_button]:border [&_button]:border-border [&_button]:rounded-full [&_button]:bg-surface [&_button]:text-text [&_button]:cursor-pointer [&_button:hover]:bg-text [&_button:hover]:text-background relative inline-flex items-center gap-2 max-w-55 py-2 px-2.5 border border-border rounded-sm text-text bg-surface [&_svg]:shrink-0 [&_svg]:text-muted" title={a.name}>
-                      <FileText size={22} />
-                      <span className="attachment-file-name overflow-hidden text-ellipsis whitespace-nowrap text-sm">{a.name ?? "document.pdf"}</span>
-                      <button title={m.chat_panel_remove_file()} aria-label={m.chat_panel_remove_file()} onClick={remove}>
+                  const label = attachmentLabel(a);
+                  return attachmentIsPdf(a) || a.kind === "saved" ? (
+                    <div key={a.kind === "saved" ? a.fileName : i} className="attachment-file [&_button]:absolute [&_button]:-top-[5px] [&_button]:-right-[5px] [&_button]:inline-flex [&_button]:items-center [&_button]:justify-center [&_button]:w-4 [&_button]:h-4 [&_button]:p-0 [&_button]:border [&_button]:border-border [&_button]:rounded-full [&_button]:bg-surface [&_button]:text-text [&_button]:cursor-pointer [&_button:hover]:bg-text [&_button:hover]:text-background relative inline-flex items-center gap-2 max-w-55 py-2 px-2.5 border border-border rounded-sm text-text bg-surface [&_svg]:shrink-0 [&_svg]:text-muted" title={label}>
+                      {attachmentIsPdf(a) ? (
+                        <FileText size={22} />
+                      ) : (
+                        <img src={attachmentPreviewSrc(a)} alt="" className="h-8 w-8 shrink-0 rounded-sm border border-border object-cover" />
+                      )}
+                      <span className="attachment-file-name overflow-hidden text-ellipsis whitespace-nowrap text-sm">{label ?? "document.pdf"}</span>
+                      <button title={attachmentIsPdf(a) ? m.chat_panel_remove_file() : m.chat_panel_remove_image()} aria-label={attachmentIsPdf(a) ? m.chat_panel_remove_file() : m.chat_panel_remove_image()} onClick={remove}>
                         <X size={11} />
                       </button>
                     </div>
                   ) : (
                     <div key={i} className="attachment-thumb relative [&_img]:w-13 [&_img]:h-13 [&_img]:object-cover [&_img]:border [&_img]:border-border [&_img]:rounded-sm [&_img]:block [&_button]:absolute [&_button]:-top-[5px] [&_button]:-right-[5px] [&_button]:inline-flex [&_button]:items-center [&_button]:justify-center [&_button]:w-4 [&_button]:h-4 [&_button]:p-0 [&_button]:border [&_button]:border-border [&_button]:rounded-full [&_button]:bg-surface [&_button]:text-text [&_button]:cursor-pointer [&_button:hover]:bg-text [&_button:hover]:text-background">
-                      <img src={a.dataUrl} alt={m.chat_pasted_image()} />
+                      <img src={attachmentPreviewSrc(a)} alt={m.chat_pasted_image()} />
                       <button title={m.chat_panel_remove_image()} aria-label={m.chat_panel_remove_image()} onClick={remove}>
                         <X size={11} />
                       </button>

@@ -539,6 +539,10 @@ fn router(state: AppState, remote_auth: Option<RemoteAuth>) -> Router {
                 .delete(delete_artifact),
         )
         .route("/api/projects/{id}/files/file", get(serve_artifact))
+        .route(
+            "/api/projects/{id}/chat-attachments",
+            get(list_chat_attachments),
+        )
         .route("/api/projects/{id}/terminal", get(project_terminal))
         .route("/api/events", get(events))
         .route("/api/settings/hf", get(hf_settings).post(set_hf_token))
@@ -7270,6 +7274,9 @@ struct SendChatReq {
     reasoning_level: Option<String>,
     #[serde(default)]
     images: Vec<local::chat::ImageAttachment>,
+    /// File names already stored in `chat-attachments/`, reused without re-upload.
+    #[serde(default)]
+    existing_files: Vec<String>,
     #[serde(default)]
     annotations: Vec<local::chat::TextAnnotation>,
     /// `"steer"` hands the message to a turn already running; omitted (an
@@ -7349,7 +7356,11 @@ async fn send_chat_message(
         .into_iter()
         .filter(|annotation| !annotation.text.trim().is_empty())
         .collect::<Vec<_>>();
-    if text.is_empty() && req.images.is_empty() && annotations.is_empty() {
+    if text.is_empty()
+        && req.images.is_empty()
+        && req.existing_files.is_empty()
+        && annotations.is_empty()
+    {
         return Err(bad_request("text is required"));
     }
     let overrides = local::chat::TurnOverrides {
@@ -7369,7 +7380,10 @@ async fn send_chat_message(
                 &id,
                 text,
                 overrides,
-                req.images,
+                local::chat::OutgoingAttachments {
+                    uploaded: req.images,
+                    existing_files: req.existing_files,
+                },
                 annotations,
                 req.client_turn_id,
             )
@@ -7395,7 +7409,10 @@ async fn send_chat_message(
                 &id,
                 text,
                 overrides,
-                req.images,
+                local::chat::OutgoingAttachments {
+                    uploaded: req.images,
+                    existing_files: req.existing_files,
+                },
                 annotations,
                 req.client_turn_id,
             )
@@ -7544,6 +7561,21 @@ async fn select_chat_branch(
         .await
         .map_err(bad_request)?;
     Ok(Json(json!({ "ok": true })))
+}
+
+/// Saved images and PDFs from this project's chats, so a new chat can reuse them.
+async fn list_chat_attachments(Path(id): Path<String>) -> ApiResult {
+    let store = Store::open()?;
+    if store.get_local_project(&id)?.is_none() {
+        return Err(not_found("project"));
+    }
+    let project_id = id.clone();
+    let attachments =
+        tokio::task::spawn_blocking(move || local::chat::list_project_attachments(&project_id))
+            .await
+            .map_err(|e| ApiError::from(anyhow!("attachment list failed: {e}")))?
+            .map_err(ApiError::from)?;
+    Ok(Json(json!({ "attachments": attachments })))
 }
 
 /// Raw bytes of a chat attachment (image or PDF), by bare file name.
