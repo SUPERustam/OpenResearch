@@ -3,6 +3,12 @@ import { queryOptions } from "@tanstack/react-query";
 import * as api from "../api";
 import { workspaceKey, deletedSessionIds } from "./client";
 
+export const listChatAttachmentsQuery = (projectId: string) => queryOptions({
+  queryKey: workspaceKey("listChatAttachments", projectId),
+  queryFn: ({ signal }) => api.listChatAttachments(projectId, signal),
+  staleTime: 30_000,
+});
+
 export const listChatSessionsQuery = (projectId: string) => queryOptions({
   queryKey: workspaceKey("listChatSessions", projectId),
   queryFn: ({ signal, client, queryKey }) => readLiveSnapshot(client, queryKey, async (): Promise<api.ChatSession[]> => {

@@ -12,7 +12,7 @@ import {
 } from "../src/workspaceState.ts";
 
 const panes = [
-  ...["experiments", "files", "artifacts", "terminal"].map((view) => ({ kind: "home", view })),
+  ...["experiments", "files", "artifacts", "attachments", "terminal"].map((view) => ({ kind: "home", view })),
   { kind: "experiment", experimentId: "experiment", view: "overview" },
   { kind: "experiment", experimentId: "experiment", view: "terminal", runId: "run" },
   { kind: "file", path: "paper.tex" },

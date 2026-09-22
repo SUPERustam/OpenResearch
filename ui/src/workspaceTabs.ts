@@ -31,6 +31,7 @@ export function rememberWorkspace(state: RightPaneSessionState, scroll: TaskWork
   if (state.filesTabOpen) home.push("files");
   if (state.terminalTabOpen) home.push("terminal");
   if (state.artifactsTabOpen) home.push("artifacts");
+  if (state.attachmentsTabOpen) home.push("attachments");
   if (state.experimentsTabOpen) home.push("experiments");
   const content = [...state.expTabs, ...state.fileTabs, ...state.planTabs, ...state.subagentTabs, ...state.codeTabs];
   const byKey = new Map(content.map((tab) => [rightTabKey(tab), tab]));
@@ -66,6 +67,7 @@ export function restoreWorkspace(saved: TaskWorkspace | undefined, pane: Pane | 
       if (tab === "experiments") state.experimentsTabOpen = true;
       if (tab === "files") state.filesTabOpen = true;
       if (tab === "artifacts") state.artifactsTabOpen = true;
+      if (tab === "attachments") state.attachmentsTabOpen = true;
       if (tab === "terminal") state.terminalTabOpen = true;
       continue;
     }
@@ -187,6 +189,7 @@ export type RightTab =
   | "experiments"
   | "files"
   | "artifacts"
+  | "attachments"
   | "terminal"
   | ExpViewDef
   | FileViewDef
@@ -223,6 +226,7 @@ export interface RightPaneSessionState {
   experimentsTabOpen: boolean;
   filesTabOpen: boolean;
   artifactsTabOpen: boolean;
+  attachmentsTabOpen: boolean;
   terminalTabOpen: boolean;
   expTabs: ExpViewDef[];
   fileTabs: FileViewDef[];
@@ -252,6 +256,7 @@ export function initialRightPaneSessionState(
     experimentsTabOpen: false,
     filesTabOpen: false,
     artifactsTabOpen: false,
+    attachmentsTabOpen: false,
     terminalTabOpen: false,
     expTabs: [],
     fileTabs: [],
@@ -332,6 +337,7 @@ export function applyPane(state: RightPaneSessionState, pane: Pane | undefined):
   if (typeof tab === "string") {
     if (tab === "files") next.filesTabOpen = true;
     else if (tab === "artifacts") next.artifactsTabOpen = true;
+    else if (tab === "attachments") next.attachmentsTabOpen = true;
     else if (tab === "terminal") next.terminalTabOpen = true;
     else next.experimentsTabOpen = true;
   } else {

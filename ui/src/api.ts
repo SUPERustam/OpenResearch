@@ -1966,6 +1966,22 @@ export interface ChatTextAnnotation {
 export const chatAttachmentUrl = (name: string) =>
   `/api/chat/attachments/${encodeURIComponent(name)}`;
 
+/** An image or PDF already saved from a chat in this project. */
+export interface ChatAttachmentRecord {
+  fileName: string;
+  displayName: string;
+  mediaType: string;
+  size: number;
+  createdAt: number;
+  sessionTitle?: string | null;
+}
+
+export const listChatAttachments = (projectId: string, signal?: AbortSignal) =>
+  get<{ attachments: ChatAttachmentRecord[] }>(
+    `/api/projects/${projectId}/chat-attachments`,
+    signal,
+  );
+
 /** Returns immediately; the turn streams over /api/events (chat.* events). */
 export const sendChatMessage = (
   sessionId: string,
@@ -1975,6 +1991,7 @@ export const sendChatMessage = (
   annotations?: ChatTextAnnotation[],
   clientTurnId?: string,
   mode?: "steer",
+  existingFiles?: string[],
 ) =>
   post<{ ok: boolean; turn?: ChatTurnResult; steered?: boolean }>(
     `/api/chat/sessions/${sessionId}/message`, {
@@ -1986,6 +2003,7 @@ export const sendChatMessage = (
     planMode: opts.planMode,
     reasoningLevel: opts.reasoningLevel,
     images,
+    existingFiles,
     annotations,
     mode,
   },

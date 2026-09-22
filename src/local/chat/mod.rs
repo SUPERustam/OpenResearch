@@ -25,8 +25,8 @@ use crate::local::harness::ResumeAction;
 use crate::local::model::LocalProject;
 use crate::local::opencode::AgentHost;
 use crate::store::{
-    now_ms, ChatSpawnState, ChatTurnAdmission, Store, StoredChatMessage, StoredChatSession,
-    StoredChatTurn, StoredQueuedChatMessage,
+    now_ms, ChatSpawnState, ChatTurnAdmission, ProjectAttachmentPart, Store, StoredChatMessage,
+    StoredChatSession, StoredChatTurn, StoredQueuedChatMessage,
 };
 
 /// Min interval between mid-turn persist+broadcast flushes (streaming parts
@@ -946,6 +946,12 @@ impl WirePart {
 
 // --- image attachments ---------------------------------------------------------
 
+/// Files riding a send: fresh uploads plus names already stored on disk.
+pub struct OutgoingAttachments {
+    pub uploaded: Vec<ImageAttachment>,
+    pub existing_files: Vec<String>,
+}
+
 /// A pasted image or uploaded file riding the send-message request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -973,6 +979,19 @@ pub struct SavedAttachment {
     pub is_pdf: bool,
 }
 
+/// A saved chat attachment the dashboard can offer again in a later chat.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatAttachmentInfo {
+    pub file_name: String,
+    pub display_name: String,
+    pub media_type: String,
+    pub size: u64,
+    pub created_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_title: Option<String>,
+}
+
 pub fn attachments_dir() -> Result<std::path::PathBuf> {
     let dir = crate::store::data_dir().join("chat-attachments");
     std::fs::create_dir_all(&dir)
@@ -989,6 +1008,143 @@ fn image_ext(media_type: &str) -> Option<&'static str> {
         "application/pdf" => Some("pdf"),
         _ => None,
     }
+}
+
+fn media_type_for_attachment(file_name: &str) -> Option<&'static str> {
+    match file_name.rsplit('.').next()? {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        "pdf" => Some("application/pdf"),
+        _ => None,
+    }
+}
+
+/// Server-minted attachment names: the same charset the raw-bytes route allows.
+fn is_attachment_file_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.contains("..")
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+}
+
+fn attachment_display_name(file_name: &str) -> String {
+    file_name
+        .split_once("__")
+        .map(|(_, name)| name.to_string())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| file_name.to_string())
+}
+
+fn contained_attachment(
+    dir: &std::path::Path,
+    file_name: &str,
+) -> Option<(std::path::PathBuf, u64, &'static str)> {
+    if !is_attachment_file_name(file_name) {
+        return None;
+    }
+    let media_type = media_type_for_attachment(file_name)?;
+    let path = dir.join(file_name);
+    let meta = std::fs::metadata(&path).ok()?;
+    if !meta.is_file() {
+        return None;
+    }
+    let root = crate::paths::canonicalize(dir).ok()?;
+    let resolved = crate::paths::canonicalize(&path).ok()?;
+    if !resolved.starts_with(&root) {
+        return None;
+    }
+    Some((path, meta.len(), media_type))
+}
+
+/// Attachments this project has already sent, newest first, skipping files
+/// that are gone from disk. A later chat can hand these names back instead of
+/// uploading the bytes again.
+pub fn list_project_attachments(project_id: &str) -> Result<Vec<ChatAttachmentInfo>> {
+    let store = Store::open()?;
+    materialize_project_attachments(&store, project_id, &attachments_dir()?)
+}
+
+fn materialize_project_attachments(
+    store: &Store,
+    project_id: &str,
+    dir: &std::path::Path,
+) -> Result<Vec<ChatAttachmentInfo>> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for ProjectAttachmentPart {
+        parts_json,
+        created_at,
+        session_title,
+    } in store.list_project_chat_attachment_parts(project_id)?
+    {
+        let Ok(parts) = serde_json::from_str::<Vec<Value>>(&parts_json) else {
+            continue;
+        };
+        for part in parts {
+            if part.get("type").and_then(Value::as_str) != Some("image") {
+                continue;
+            }
+            let Some(file_name) = part
+                .get("text")
+                .and_then(Value::as_str)
+                .filter(|name| !name.starts_with("data:"))
+                .map(str::to_string)
+            else {
+                continue;
+            };
+            if !seen.insert(file_name.clone()) {
+                continue;
+            }
+            let Some((_, size, media_type)) = contained_attachment(dir, &file_name) else {
+                continue;
+            };
+            let title = session_title
+                .as_deref()
+                .map(str::trim)
+                .filter(|title| !title.is_empty())
+                .map(str::to_string);
+            out.push(ChatAttachmentInfo {
+                display_name: attachment_display_name(&file_name),
+                file_name,
+                media_type: media_type.to_string(),
+                size,
+                created_at,
+                session_title: title,
+            });
+            if out.len() == 200 {
+                return Ok(out);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Re-attach files already stored under `chat-attachments/` without copying them.
+fn load_existing_attachments(names: &[String]) -> Result<Vec<SavedAttachment>> {
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+    let dir = attachments_dir()?;
+    let mut saved = Vec::new();
+    let mut seen = HashSet::new();
+    for name in names {
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        let Some((path, _, media_type)) = contained_attachment(&dir, name) else {
+            return Err(anyhow!("attachment not found"));
+        };
+        saved.push(SavedAttachment {
+            file_name: name.clone(),
+            path,
+            display_name: attachment_display_name(name),
+            is_pdf: media_type == "application/pdf",
+        });
+    }
+    Ok(saved)
 }
 
 /// Sanitize an original file name into the `<name>.<ext>` form embedded in the
@@ -2077,6 +2233,10 @@ struct QueuedMessage {
     transcript_text: Option<String>,
     overrides: TurnOverrides,
     images: Vec<ImageAttachment>,
+    /// Server-minted names already on disk. Empty on messages queued before
+    /// the attachments sidebar existed.
+    #[serde(default)]
+    existing_files: Vec<String>,
     annotations: Vec<TextAnnotation>,
     #[serde(default)]
     dispatch_attempts: u32,
@@ -2179,6 +2339,8 @@ struct SendTurnRequest {
     transcript: TranscriptDisplay,
     overrides: TurnOverrides,
     images: TurnAttachments,
+    /// Attachment file names already saved by an earlier chat.
+    existing_files: Vec<String>,
     admission: TurnAdmission,
     client_turn_id: Option<String>,
     request_hash: Option<String>,
@@ -2490,10 +2652,11 @@ fn new_queued_id() -> String {
 /// image/file-only send (which carries no text to show).
 fn queued_label(m: &QueuedMessage) -> String {
     let display_text = m.transcript_text.as_deref().unwrap_or(&m.text);
-    if !display_text.trim().is_empty() || m.images.is_empty() {
+    let attachment_count = m.images.len() + m.existing_files.len();
+    if !display_text.trim().is_empty() || attachment_count == 0 {
         return display_text.to_string();
     }
-    let n = m.images.len();
+    let n = attachment_count;
     format!("{n} attachment{}", if n == 1 { "" } else { "s" })
 }
 
@@ -3412,15 +3575,23 @@ impl ChatHost {
         };
         let overrides = TurnOverrides::default();
         let images = TurnAttachments::Uploaded(Vec::new());
+        let existing_files = Vec::new();
         let queued = QueuedMessage {
             id: id.clone(),
             client_turn_id: client_turn_id.clone(),
-            request_hash: turn_request_hash(&messages, &transcript, &overrides, &images)?,
+            request_hash: turn_request_hash(
+                &messages,
+                &transcript,
+                &overrides,
+                &images,
+                &existing_files,
+            )?,
             // The raw text: the queue path expands slash-skills itself.
             text: message.display,
             transcript_text: None,
             overrides,
             images: Vec::new(),
+            existing_files,
             annotations: Vec::new(),
             dispatch_attempts: 0,
             dispatch_error: None,
@@ -3756,6 +3927,7 @@ impl ChatHost {
                         },
                         overrides,
                         images: TurnAttachments::Uploaded(item.images.clone()),
+                        existing_files: item.existing_files.clone(),
                         admission: TurnAdmission::Preclaimed(guard),
                         client_turn_id: Some(item.client_turn_id.clone()),
                         request_hash: Some(item.request_hash.clone()),
@@ -3911,11 +4083,15 @@ impl ChatHost {
         session_id: &str,
         text: String,
         overrides: TurnOverrides,
-        images: Vec<ImageAttachment>,
+        attachments: OutgoingAttachments,
         annotations: Vec<TextAnnotation>,
         client_turn_id: Option<String>,
     ) -> Result<Option<SendMessageResult>> {
-        if !text.trim().is_empty() && images.is_empty() && annotations.is_empty() {
+        if !text.trim().is_empty()
+            && attachments.uploaded.is_empty()
+            && attachments.existing_files.is_empty()
+            && annotations.is_empty()
+        {
             let sink = {
                 let steering = self.steering.lock().unwrap();
                 steering
@@ -3944,7 +4120,7 @@ impl ChatHost {
             session_id,
             text,
             overrides,
-            images,
+            attachments,
             annotations,
             client_turn_id,
         )
@@ -3958,7 +4134,7 @@ impl ChatHost {
         session_id: &str,
         text: String,
         overrides: TurnOverrides,
-        images: Vec<ImageAttachment>,
+        attachments: OutgoingAttachments,
         annotations: Vec<TextAnnotation>,
         client_turn_id: Option<String>,
     ) -> Result<SendMessageResult> {
@@ -3981,7 +4157,8 @@ impl ChatHost {
                     record_user_message: true,
                 },
                 overrides,
-                images: TurnAttachments::Uploaded(images),
+                images: TurnAttachments::Uploaded(attachments.uploaded),
+                existing_files: attachments.existing_files,
                 admission: TurnAdmission::QueueIfBusy,
                 client_turn_id,
                 request_hash: None,
@@ -4242,6 +4419,7 @@ impl ChatHost {
                             },
                             overrides: settings,
                             images: TurnAttachments::Uploaded(Vec::new()),
+                            existing_files: Vec::new(),
                             admission: TurnAdmission::RejectIfBusy,
                             client_turn_id: Some(format!("recover_{turn_id}")),
                             request_hash: None,
@@ -4400,6 +4578,7 @@ impl ChatHost {
                     transcript: display,
                     overrides,
                     images: TurnAttachments::Replayed(attachments),
+                    existing_files: Vec::new(),
                     admission: TurnAdmission::Preclaimed(guard),
                     client_turn_id: None,
                     request_hash: None,
@@ -4485,6 +4664,7 @@ impl ChatHost {
                 },
                 overrides: TurnOverrides::default(),
                 images: TurnAttachments::Uploaded(Vec::new()),
+                existing_files: Vec::new(),
                 admission: TurnAdmission::Preclaimed(guard),
                 client_turn_id: None,
                 request_hash: None,
@@ -4521,6 +4701,7 @@ impl ChatHost {
                 },
                 overrides: TurnOverrides::default(),
                 images: TurnAttachments::Uploaded(Vec::new()),
+                existing_files: Vec::new(),
                 admission: TurnAdmission::Preclaimed(guard),
                 client_turn_id: None,
                 request_hash: None,
@@ -4544,13 +4725,16 @@ impl ChatHost {
             transcript,
             mut overrides,
             images,
+            existing_files,
             admission,
             client_turn_id: requested_client_turn_id,
             request_hash: request_hash_override,
         } = request;
         let request_hash = match request_hash_override {
             Some(hash) => hash,
-            None => turn_request_hash(&messages, &transcript, &overrides, &images)?,
+            None => {
+                turn_request_hash(&messages, &transcript, &overrides, &images, &existing_files)?
+            }
         };
         let client_turn_id = requested_client_turn_id
             .filter(|id| !id.trim().is_empty())
@@ -4685,7 +4869,11 @@ impl ChatHost {
                     let TurnAttachments::Uploaded(images) = images else {
                         return Err(anyhow!("a re-sampled turn cannot be queued"));
                     };
-                    if text.trim().is_empty() && images.is_empty() && !has_annotations {
+                    if text.trim().is_empty()
+                        && images.is_empty()
+                        && existing_files.is_empty()
+                        && !has_annotations
+                    {
                         return Err(anyhow!("message content is required"));
                     }
                     let message = messages
@@ -4736,6 +4924,7 @@ impl ChatHost {
                         transcript_text,
                         overrides,
                         images,
+                        existing_files,
                         annotations,
                         dispatch_attempts: 0,
                         dispatch_error: None,
@@ -4908,7 +5097,8 @@ impl ChatHost {
             store.set_chat_session_archived(&session.id, false)?;
             session.archived = false;
         }
-        let saved_images = images.save()?;
+        let mut saved_images = images.save()?;
+        saved_images.extend(load_existing_attachments(&existing_files)?);
         let display_text = transcript_text.as_deref().unwrap_or(&text);
         // The input auto-titling runs on — set only on the first message.
         // Owned because the title carries what the user typed, not the expanded
@@ -5638,6 +5828,7 @@ impl ChatHost {
                         },
                         overrides,
                         images: TurnAttachments::Uploaded(Vec::new()),
+                        existing_files: Vec::new(),
                         admission: TurnAdmission::RejectIfBusy,
                         client_turn_id: None,
                         request_hash: None,
@@ -6252,8 +6443,11 @@ fn turn_request_hash(
     transcript: &TranscriptDisplay,
     overrides: &TurnOverrides,
     images: &TurnAttachments,
+    existing_files: &[String],
 ) -> Result<String> {
-    let value = json!({
+    // `existingFiles` stays off the hash when empty so retries of turns admitted
+    // before that field existed still match their stored request hash.
+    let mut value = json!({
         "messages": messages.iter().map(|message| json!({
             "text": message.text,
             "annotations": message.annotations,
@@ -6263,6 +6457,9 @@ fn turn_request_hash(
         "settings": overrides,
         "images": images.hash_value(),
     });
+    if !existing_files.is_empty() {
+        value["existingFiles"] = json!(existing_files);
+    }
     let mut digest = Sha256::new();
     digest.update(serde_json::to_vec(&value)?);
     Ok(format!("{:x}", digest.finalize()))
@@ -9606,6 +9803,7 @@ with other project runs using `orx runs p1` and inspect this run's logs using `o
                 transcript_text: None,
                 overrides: TurnOverrides::default(),
                 images: Vec::new(),
+                existing_files: Vec::new(),
                 annotations: Vec::new(),
                 dispatch_attempts: 0,
                 dispatch_error: None,
@@ -9626,6 +9824,7 @@ with other project runs using `orx runs p1` and inspect this run's logs using `o
             transcript_text: None,
             overrides: TurnOverrides::default(),
             images: Vec::new(),
+            existing_files: Vec::new(),
             annotations: Vec::new(),
             dispatch_attempts: crate::local::harness::ORX_MAX_RETRIES + 1,
             dispatch_error: Some("connection refused".into()),
@@ -10077,5 +10276,127 @@ mod steering_tests {
         assert_eq!(host.queued_items("owner")[0]["text"], "still here");
         drop(store);
         let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod attachment_list_tests {
+    use super::{attachment_display_name, contained_attachment, materialize_project_attachments};
+    use crate::store::{Store, StoredChatMessage, StoredChatSession};
+
+    fn session(id: &str, project_id: &str, title: Option<&str>) -> StoredChatSession {
+        StoredChatSession {
+            id: id.into(),
+            project_id: project_id.into(),
+            harness: "codex".into(),
+            native_session_id: None,
+            title: title.map(str::to_string),
+            title_source: title.map(|_| "user".into()),
+            model: None,
+            service_tier: None,
+            permission_mode: None,
+            plan_mode: false,
+            plan_reset_pending: false,
+            reasoning_level: None,
+            archived: false,
+            context_usage_json: None,
+            bootstrap_context: None,
+            active_leaf_id: None,
+            parent_session_id: None,
+            created_at: 1,
+            updated_at: 1,
+        }
+    }
+
+    fn message(
+        id: &str,
+        session_id: &str,
+        parts_json: String,
+        created_at: i64,
+    ) -> StoredChatMessage {
+        StoredChatMessage {
+            id: id.into(),
+            session_id: session_id.into(),
+            role: "user".into(),
+            parts_json,
+            created_at,
+            completed_at: None,
+            parent_id: None,
+            base_native_session_id: None,
+            result_native_session_id: None,
+        }
+    }
+
+    #[test]
+    fn project_attachment_list_reuses_files_saved_by_that_project() {
+        let root =
+            std::env::temp_dir().join(format!("orx-chat-attachments-{}", uuid::Uuid::new_v4()));
+        let files = root.join("files");
+        std::fs::create_dir_all(&files).unwrap();
+        let store = Store::open_at(root.join("db")).unwrap();
+        let kept = "att-11111111-1111-1111-1111-111111111111__paper.pdf";
+        let older = "att-33333333-3333-3333-3333-333333333333__plot.png";
+        let other = "att-22222222-2222-2222-2222-222222222222__notes.pdf";
+        std::fs::write(files.join(kept), b"%PDF").unwrap();
+        std::fs::write(files.join(older), b"png").unwrap();
+        std::fs::write(files.join(other), b"%PDF").unwrap();
+        store
+            .create_chat_session(&session("s1", "project-a", Some("Literature")))
+            .unwrap();
+        store
+            .create_chat_session(&session("s2", "project-b", Some("Other")))
+            .unwrap();
+        store
+            .create_chat_session(&session("s3", "project-a", Some("  ")))
+            .unwrap();
+        let newest = serde_json::json!([
+            {"id": "img0", "type": "image", "text": kept},
+            {"id": "img1", "type": "image", "text": "data:application/pdf;base64,QQ=="},
+            {"id": "img2", "type": "image", "text": "../secret.pdf"},
+            {"id": "p0", "type": "text", "text": "see attached"},
+        ])
+        .to_string();
+        store
+            .upsert_chat_message(&message("m-new", "s1", newest, 30))
+            .unwrap();
+        store
+            .upsert_chat_message(&message(
+                "m-old",
+                "s3",
+                serde_json::json!([
+                    {"id": "img0", "type": "image", "text": kept},
+                    {"id": "img1", "type": "image", "text": older},
+                    {"id": "img2", "type": "image", "text": "att-missing__gone.pdf"},
+                ])
+                .to_string(),
+                10,
+            ))
+            .unwrap();
+        store
+            .upsert_chat_message(&message(
+                "m-other",
+                "s2",
+                serde_json::json!([{"id": "img0", "type": "image", "text": other}]).to_string(),
+                40,
+            ))
+            .unwrap();
+
+        let listed = materialize_project_attachments(&store, "project-a", &files).unwrap();
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].file_name, kept);
+        assert_eq!(listed[0].display_name, "paper.pdf");
+        assert_eq!(listed[0].media_type, "application/pdf");
+        assert_eq!(listed[0].session_title.as_deref(), Some("Literature"));
+        assert_eq!(listed[0].created_at, 30);
+        assert_eq!(listed[0].size, 4);
+        assert_eq!(listed[1].file_name, older);
+        assert_eq!(listed[1].display_name, "plot.png");
+        assert_eq!(listed[1].session_title, None);
+        assert!(contained_attachment(&files, "../secret.pdf").is_none());
+        assert!(contained_attachment(&files, "att-missing__gone.pdf").is_none());
+        assert_eq!(attachment_display_name(kept), "paper.pdf");
+
+        drop(store);
+        let _ = std::fs::remove_dir_all(root);
     }
 }
