@@ -1,6 +1,6 @@
 ---
 name: orx-lit-review
-description: "Explain and compare scientific or technical concepts using original research evidence. Use before answering conceptual or architectural questions, research claims, literature reviews, or related-work requests, even when no paper, citation, or search is requested. Retrieve with relevant alphaXiv, OpenAlex, and bioRxiv connectors; scale retrieval to the question."
+description: "Explain and compare scientific or technical concepts using original research evidence. Use before conceptual, architectural, literature-review, or related-work questions, even with no paper named. Retrieve only through enabled connectors (alphaXiv, OpenAlex, bioRxiv, Lacuna, Asta, SciSpace, Keenable)."
 ---
 
 # Literature retrieval
@@ -8,8 +8,12 @@ description: "Explain and compare scientific or technical concepts using origina
 Use this skill for scientific explanations and comparisons, even without a named
 paper. Never delegate retrieval to a sub-agent.
 
-Use enabled literature connectors appropriate to the topic. General web search
-is a fallback only when relevant connectors provide no useful evidence. Do not
+Use enabled literature connectors appropriate to the topic. The composer Data
+sources switches are authoritative: a command that says a source is disabled
+must not be retried or replaced with a direct API or website call.
+
+Keenable (`orx discover keenable`) is the web-search fallback, and only when
+that switch is on and scholarly connectors returned nothing useful. Do not
 supplement successful retrieval with a web search for a familiar or preferred
 paper; use a focused connector query or `orx paper`. Opening a selected original
 PDF to extract evidence is source access; opening its abstract first is unnecessary.
@@ -37,6 +41,11 @@ orx discover keyword "<exact keyword query>"
 orx discover embedding "<semantic description in the user's terms>"
 orx discover openalex "<scholarly search query>"
 orx discover biorxiv "<biology preprint query>"
+orx discover lacuna "<ML query>"
+orx discover lacuna "<ML direction>" --kind direction
+orx discover asta "<scholarly query>"
+orx discover keenable "<web fallback query>"
+orx discover scispace "<query>"
 ```
 
 - `keyword` searches title, abstract, and full text. Results include the match
@@ -50,6 +59,19 @@ orx discover biorxiv "<biology preprint query>"
   outside arXiv.
 - `biorxiv` searches OpenAlex's bioRxiv source index. bioRxiv has no comparable
   native search API; the bioRxiv API is used later when reading a selected DOI.
+- `lacuna` searches the Lacuna ML research map (papers by default; `--kind
+  direction` or `--kind hypothesis` for research directions and proposals).
+  Use it for machine learning and nearby AI questions, not unrelated fields.
+  Read a hit with `orx paper <url>`.
+- `asta` searches the Semantic Scholar corpus through Ai2 Asta's MCP tools.
+  It needs `ASTA_API_KEY` in Data sources. Stay inside this retrieval loop; do
+  not shell out to `asta literature interactive`. An arXiv id in an Asta hit
+  is read with `orx paper <arxiv-id>` (alphaXiv). A `s2:` id is read with
+  `orx paper <id> --source asta`.
+- `keenable` searches the web and returns page URLs. Read one with
+  `orx paper <url> --source keenable`. It is a fallback, not a paper corpus.
+- `scispace` is reserved for SciSpace. If the command says the API schema is
+  unpublished, stop. Do not scrape scispace.com or invent a request.
 - Every primitive returns the same JSON shape: `source`, self-routing `id`,
   title, abstract, and publication date. alphaXiv results may include votes and
   full-text snippets; OpenAlex and bioRxiv results may include citations.
@@ -108,7 +130,10 @@ orx discover biorxiv "<query>" --limit 20
    according to whether exact full-text evidence, semantic coverage, or both are
    useful. Add OpenAlex for broader journal, conference, citation, or
    cross-disciplinary coverage. Use bioRxiv for biology and adjacent
-   life-science preprints, not as a ritual call for unrelated topics. When the
+   life-science preprints, not as a ritual call for unrelated topics. Add
+   Lacuna for machine-learning papers, directions, or hypotheses. Add Asta
+   when it is enabled and a citation-graph or Semantic Scholar pass would
+   cover a gap alphaXiv did not. When the
    corpus is genuinely ambiguous or interdisciplinary, query multiple relevant
    sources concurrently. If the initial round includes alphaXiv keyword and its
    terms mix other terms with one or more 2–10 character tokens

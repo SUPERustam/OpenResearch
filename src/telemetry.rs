@@ -155,10 +155,15 @@ pub(crate) struct Settings {
     #[serde(default)]
     pub github_default_prompt_seen: Option<bool>,
     /// Literature sources the user turned off (Settings → Literature sources).
-    /// Values are `LitSource::as_str()` names; empty = all sources enabled, so a
-    /// source added later defaults to enabled. Enforced by discovery and paper reading.
+    /// Values are `LitSource::as_str()` names. An empty list means every source
+    /// is enabled, except [`LitSource::default_off`] sources the user has not
+    /// chosen yet (`lit_source_choices`).
     #[serde(default)]
     pub disabled_lit_sources: Vec<String>,
+    /// Sources the user has explicitly toggled. Until a default-off source
+    /// appears here, discovery treats it as disabled.
+    #[serde(default)]
+    pub lit_source_choices: Vec<String>,
     /// Whether orx may install updates on its own (Settings → Updates). Absent =
     /// enabled. Turning it off still leaves the outdated-version warning in
     /// place; only the silent apply stops.
@@ -270,17 +275,34 @@ pub(crate) fn set_profile(profile: ResearchProfile) -> std::io::Result<()> {
 
 /// Literature sources the user has disabled (their `LitSource::as_str()` names).
 /// Read by discovery and paper reading; `crate::config` re-exports this as
-/// `disabled_lit_sources`.
+/// `disabled_lit_sources`. Default-off sources stay disabled until a settings
+/// save records them in `lit_source_choices`.
 pub(crate) fn disabled_lit_sources() -> Vec<String> {
-    load_settings()
-        .map(|s| s.disabled_lit_sources)
-        .unwrap_or_default()
+    let settings = load_settings().unwrap_or_default();
+    let mut disabled = settings.disabled_lit_sources;
+    for source in crate::LitSource::default_off() {
+        let name = source.as_str();
+        let chosen = settings
+            .lit_source_choices
+            .iter()
+            .any(|choice| choice == name);
+        if !chosen && !disabled.iter().any(|item| item == name) {
+            disabled.push(name.to_string());
+        }
+    }
+    disabled
 }
 
-/// Persist the disabled-source set, preserving every other settings field (same
-/// `mutate_settings` guarantees as the data dir).
+/// Persist the disabled-source set and mark every current source as an
+/// explicit user choice, preserving every other settings field.
 pub(crate) fn set_disabled_lit_sources(disabled: Vec<String>) -> std::io::Result<()> {
-    mutate_settings(|s| s.disabled_lit_sources = disabled)
+    mutate_settings(|s| {
+        s.disabled_lit_sources = disabled;
+        s.lit_source_choices = crate::LitSource::all()
+            .iter()
+            .map(|source| source.as_str().to_string())
+            .collect();
+    })
 }
 
 pub(crate) fn github_for_new_projects() -> bool {
@@ -1410,7 +1432,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("orx-tel-lit-{}", uuid::Uuid::new_v4()));
         std::env::set_var("XDG_CONFIG_HOME", &dir);
 
-        assert!(disabled_lit_sources().is_empty(), "default: all enabled");
+        assert_eq!(
+            disabled_lit_sources(),
+            vec!["asta".to_string(), "scispace".to_string()],
+            "keyed sources stay off until the user chooses them"
+        );
 
         set_persisted_disabled(true).unwrap();
         set_profile(ResearchProfile {

@@ -1194,5 +1194,22 @@
   "onboarding_choose_another_agent": "选择其他编程智能体",
   "image_zoom_out": "缩小",
   "image_zoom_in": "放大",
-  "image_zoom_reset": "重置为适合窗口"
+  "image_zoom_reset": "重置为适合窗口",
+  "lit_sources_group_builtin": "已在 OpenResearch 中使用",
+  "lit_sources_group_more": "更多文献工具",
+  "lit_sources_hint_alphaxiv": "arXiv 论文",
+  "lit_sources_hint_openalex": "全学科",
+  "lit_sources_hint_biorxiv": "生物学预印本",
+  "lit_sources_hint_lacuna": "机器学习研究地图",
+  "lit_sources_key_required": "需要 API 密钥",
+  "lit_sources_key_optional": "可选 API 密钥",
+  "lit_sources_key_saved": "已保存 API 密钥",
+  "lit_sources_add_key": "添加 API 密钥",
+  "lit_sources_replace_key": "更换 API 密钥",
+  "lit_sources_save_key": "保存",
+  "lit_sources_key_placeholder": "粘贴 API 密钥",
+  "activity_searched_lacuna": "已搜索 Lacuna",
+  "activity_searched_keenable": "已用 Keenable 搜索网页",
+  "activity_searched_asta": "已搜索 Asta",
+  "activity_searched_scispace": "已搜索 SciSpace"
 }

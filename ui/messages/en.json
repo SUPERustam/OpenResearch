@@ -1194,5 +1194,22 @@
   "onboarding_choose_another_agent": "Choose another coding agent",
   "image_zoom_out": "Zoom out",
   "image_zoom_in": "Zoom in",
-  "image_zoom_reset": "Reset zoom to fit"
+  "image_zoom_reset": "Reset zoom to fit",
+  "lit_sources_group_builtin": "Already in OpenResearch",
+  "lit_sources_group_more": "More literature tools",
+  "lit_sources_hint_alphaxiv": "arXiv papers",
+  "lit_sources_hint_openalex": "All fields",
+  "lit_sources_hint_biorxiv": "Biology preprints",
+  "lit_sources_hint_lacuna": "ML research map",
+  "lit_sources_key_required": "API key required",
+  "lit_sources_key_optional": "Optional API key",
+  "lit_sources_key_saved": "API key saved",
+  "lit_sources_add_key": "Add API key",
+  "lit_sources_replace_key": "Replace API key",
+  "lit_sources_save_key": "Save",
+  "lit_sources_key_placeholder": "Paste API key",
+  "activity_searched_lacuna": "Searched Lacuna",
+  "activity_searched_keenable": "Searched the web with Keenable",
+  "activity_searched_asta": "Searched Asta",
+  "activity_searched_scispace": "Searched SciSpace"
 }

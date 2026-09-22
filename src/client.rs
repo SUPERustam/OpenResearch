@@ -213,6 +213,11 @@ fn http() -> &'static Client {
     CLIENT.get_or_init(Client::new)
 }
 
+/// Shared client for public literature hosts (Lacuna, Keenable, Asta).
+pub(crate) fn public_http() -> &'static Client {
+    http()
+}
+
 /// Sends a request and returns the response after applying the shared error
 /// semantics (network failure, 401, other non-2xx). Body decoding is left to
 /// the caller so both JSON-decoding and no-content endpoints can share this.
