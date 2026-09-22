@@ -16,6 +16,11 @@ export const STATUS_STYLES: Record<string, StatusStyle> = {
   cancelled: { tone: "caution", live: false },
   editing: { tone: "accent", live: true },
   idle: { tone: "neutral", live: false },
+  open: { tone: "neutral", live: false },
+  testing: { tone: "info", live: true },
+  supported: { tone: "success", live: false },
+  refuted: { tone: "danger", live: false },
+  inconclusive: { tone: "caution", live: false },
 };
 
 export function statusStyle(status: string): StatusStyle {
@@ -31,6 +36,11 @@ const STATUS_LABELS: Record<string, () => string> = {
   cancelled: m.status_cancelled,
   editing: m.status_editing,
   idle: m.status_idle,
+  open: m.hypothesis_status_open,
+  testing: m.hypothesis_status_testing,
+  supported: m.hypothesis_status_supported,
+  refuted: m.hypothesis_status_refuted,
+  inconclusive: m.hypothesis_status_inconclusive,
 };
 
 export function statusLabel(s: string): string {

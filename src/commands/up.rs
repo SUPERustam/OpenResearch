@@ -465,6 +465,25 @@ fn router(state: AppState, remote_auth: Option<RemoteAuth>) -> Router {
         )
         .route("/api/github/repo-access", get(github_repo_access))
         .route("/api/projects/{id}/experiments", get(list_experiments))
+        .route(
+            "/api/projects/{id}/hypotheses",
+            get(list_hypotheses).post(create_hypothesis),
+        )
+        .route(
+            "/api/hypotheses/{id}",
+            get(get_hypothesis)
+                .patch(patch_hypothesis)
+                .delete(delete_hypothesis),
+        )
+        .route("/api/hypotheses/{id}/sources", post(add_hypothesis_source))
+        .route(
+            "/api/hypotheses/{id}/sources/{source_id}",
+            axum::routing::delete(delete_hypothesis_source),
+        )
+        .route(
+            "/api/hypotheses/{id}/links",
+            post(add_hypothesis_link).delete(delete_hypothesis_link),
+        )
         .route("/api/projects/{id}/runs", get(list_project_runs))
         .route("/api/papers/search", get(search_papers_api))
         .route("/api/papers/resolve", get(resolve_paper_api))
@@ -1899,6 +1918,202 @@ async fn list_experiments(Path(id): Path<String>) -> ApiResult {
         .ok_or_else(|| not_found("project"))?;
     let experiments = store.list_experiments_by_project(&id)?;
     Ok(Json(json!({ "experiments": experiments })))
+}
+
+fn hypothesis_result(result: Result<local::model::HypothesisDocument>) -> ApiResult {
+    match result {
+        Ok(doc) => Ok(Json(json!({ "hypothesis": doc }))),
+        Err(err) => hypothesis_error(err),
+    }
+}
+
+fn hypothesis_error(err: crate::error::Error) -> ApiResult {
+    let msg = err.to_string();
+    if msg.contains("not found") {
+        Err(ApiError(StatusCode::NOT_FOUND, msg))
+    } else {
+        Err(bad_request(msg))
+    }
+}
+
+async fn list_hypotheses(Path(id): Path<String>) -> ApiResult {
+    let store = Store::open()?;
+    store
+        .get_local_project(&id)?
+        .ok_or_else(|| not_found("project"))?;
+    let hypotheses = local::hypotheses::list_documents(&store, &id)?;
+    Ok(Json(json!({ "hypotheses": hypotheses })))
+}
+
+async fn get_hypothesis(Path(id): Path<String>) -> ApiResult {
+    let store = Store::open()?;
+    hypothesis_result(local::hypotheses::document(&store, &id))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateHypothesisReq {
+    title: String,
+    #[serde(default)]
+    parent_hypothesis_id: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+}
+
+async fn create_hypothesis(
+    Path(id): Path<String>,
+    Json(req): Json<CreateHypothesisReq>,
+) -> ApiResult {
+    let store = Store::open()?;
+    let project = store
+        .get_local_project(&id)?
+        .ok_or_else(|| not_found("project"))?;
+    hypothesis_result(local::hypotheses::create(
+        &store,
+        &project,
+        local::hypotheses::CreateHypothesis {
+            title: req.title,
+            parent_id: req.parent_hypothesis_id,
+            description: req.description,
+            status: req.status,
+        },
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PatchHypothesisReq {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+}
+
+async fn patch_hypothesis(
+    Path(id): Path<String>,
+    Json(req): Json<PatchHypothesisReq>,
+) -> ApiResult {
+    let store = Store::open()?;
+    hypothesis_result(local::hypotheses::update(
+        &store,
+        &id,
+        local::hypotheses::HypothesisPatch {
+            title: req.title,
+            description: req.description,
+            status: req.status,
+            parent_id: None,
+        },
+    ))
+}
+
+async fn delete_hypothesis(Path(id): Path<String>) -> ApiResult {
+    let store = Store::open()?;
+    match local::hypotheses::delete(&store, &id) {
+        Ok(hypothesis) => Ok(Json(json!({ "ok": true, "id": hypothesis.id }))),
+        Err(err) => hypothesis_error(err),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HypothesisSourceReq {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    paper_id: Option<String>,
+    #[serde(default)]
+    note: Option<String>,
+    /// When set, records an originating experiment instead of an internet source.
+    #[serde(default)]
+    experiment_id: Option<String>,
+}
+
+async fn add_hypothesis_source(
+    Path(id): Path<String>,
+    Json(req): Json<HypothesisSourceReq>,
+) -> ApiResult {
+    let store = Store::open()?;
+    if let Some(experiment_id) = req.experiment_id {
+        if req.url.is_some() || req.paper_id.is_some() {
+            return Err(bad_request(
+                "Pass either experimentId or an internet source, not both.",
+            ));
+        }
+        return hypothesis_result(local::hypotheses::link_experiment(
+            &store,
+            &id,
+            &experiment_id,
+            "origin",
+            req.note,
+        ));
+    }
+    hypothesis_result(local::hypotheses::add_internet_source(
+        &store,
+        &id,
+        local::hypotheses::InternetSourceInput {
+            title: req.title,
+            url: req.url,
+            paper_id: req.paper_id,
+            note: req.note,
+        },
+    ))
+}
+
+async fn delete_hypothesis_source(Path((id, source_id)): Path<(String, String)>) -> ApiResult {
+    let store = Store::open()?;
+    hypothesis_result(local::hypotheses::remove_internet_source(
+        &store, &id, &source_id,
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HypothesisLinkReq {
+    experiment_id: String,
+    /// `origin` (the result created the claim) or `test` (the experiment tests it).
+    role: String,
+    #[serde(default)]
+    note: Option<String>,
+}
+
+async fn add_hypothesis_link(
+    Path(id): Path<String>,
+    Json(req): Json<HypothesisLinkReq>,
+) -> ApiResult {
+    let store = Store::open()?;
+    hypothesis_result(local::hypotheses::link_experiment(
+        &store,
+        &id,
+        &req.experiment_id,
+        &req.role,
+        req.note,
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HypothesisUnlinkQuery {
+    experiment_id: String,
+    role: String,
+}
+
+async fn delete_hypothesis_link(
+    Path(id): Path<String>,
+    Query(query): Query<HypothesisUnlinkQuery>,
+) -> ApiResult {
+    let store = Store::open()?;
+    hypothesis_result(local::hypotheses::unlink_experiment(
+        &store,
+        &id,
+        &query.experiment_id,
+        &query.role,
+    ))
 }
 
 async fn list_project_runs(Path(id): Path<String>) -> ApiResult {
@@ -7779,6 +7994,8 @@ impl Drop for DashboardClientGuard {
 struct EventCursor {
     projects: HashMap<String, i64>,
     experiments: HashMap<String, i64>,
+    /// Hypothesis id → (project id, updated_at). Missing ids emit hypothesis.deleted.
+    hypotheses: HashMap<String, (String, i64)>,
     files: HashMap<String, u64>,
     runs: HashMap<String, (String, i64)>,
     log_offsets: HashMap<String, u64>,
@@ -7865,6 +8082,7 @@ fn collect_events(cursor: &mut EventCursor, first: bool) -> Result<Vec<Event>> {
             ));
         }
         push_experiment_events(&store, &project.id, cursor, &mut out)?;
+        push_hypothesis_events(&store, &project.id, cursor, &mut out)?;
         // Artifacts appear live — anything written into the directory (by the
         // agent or the user) pings the UI to refetch the listing.
         let fp = local::files::fingerprint(&project);
@@ -7925,6 +8143,52 @@ fn push_experiment_events(
                 &json!({ "experiment": exp }),
             ));
         }
+    }
+    Ok(())
+}
+
+fn push_hypothesis_events(
+    store: &Store,
+    project_id: &str,
+    cursor: &mut EventCursor,
+    out: &mut Vec<Event>,
+) -> Result<()> {
+    let mut seen = HashSet::new();
+    for doc in local::hypotheses::list_documents(store, project_id)? {
+        seen.insert(doc.hypothesis.id.clone());
+        let changed = cursor
+            .hypotheses
+            .get(&doc.hypothesis.id)
+            .map(|(_, updated_at)| *updated_at)
+            != Some(doc.hypothesis.updated_at);
+        if changed {
+            cursor.hypotheses.insert(
+                doc.hypothesis.id.clone(),
+                (project_id.to_string(), doc.hypothesis.updated_at),
+            );
+            out.push(json_event(
+                "hypothesis.updated",
+                &json!({ "hypothesis": doc }),
+            ));
+        }
+    }
+    let stale: Vec<String> = cursor
+        .hypotheses
+        .iter()
+        .filter_map(|(id, (project, _))| {
+            if project == project_id && !seen.contains(id) {
+                Some((*id).clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+    for id in stale {
+        cursor.hypotheses.remove(&id);
+        out.push(json_event(
+            "hypothesis.deleted",
+            &json!({ "id": id, "projectId": project_id }),
+        ));
     }
     Ok(())
 }

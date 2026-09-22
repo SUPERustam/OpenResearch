@@ -101,6 +101,9 @@ enum Command {
     /// Operate on one local experiment node.
     Exp(ExpArgs),
 
+    /// Record and inspect the hypothesis tree for a local project.
+    Hypothesis(HypothesisArgs),
+
     /// Print CLI usage for agents, or fetch a skill doc.
     Skill(SkillArgs),
 
@@ -403,6 +406,104 @@ pub enum AgentCommand {
 pub struct ExpArgs {
     #[command(subcommand)]
     pub command: ExpCommand,
+}
+
+#[derive(Args, Debug)]
+pub struct HypothesisArgs {
+    #[command(subcommand)]
+    pub command: HypothesisCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum HypothesisCommand {
+    /// Add a hypothesis. Omit --parent to create a root claim.
+    Create {
+        /// Local project id from `orx projects`.
+        project_id: String,
+        /// Hypothesis title (required).
+        #[arg(long)]
+        title: Option<String>,
+        /// Parent hypothesis id. Omit to create a root.
+        #[arg(long)]
+        parent: Option<String>,
+        /// Markdown description of the claim.
+        #[arg(long)]
+        description: Option<String>,
+        /// open, testing, supported, refuted, or inconclusive. Default: open.
+        #[arg(long)]
+        status: Option<String>,
+    },
+    /// List every hypothesis in a project.
+    List { project_id: String },
+    /// Print one hypothesis, its sources, and its experiment links.
+    Status { hyp_id: String },
+    /// View a hypothesis description, or overwrite it with `--set` / `--stdin`.
+    Desc {
+        hyp_id: String,
+        /// Overwrite the description with this value.
+        #[arg(long)]
+        set: Option<String>,
+        /// Overwrite the description with the whole of stdin.
+        #[arg(long)]
+        stdin: bool,
+    },
+    /// Update status, title, or description.
+    Set {
+        hyp_id: String,
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        description: Option<String>,
+    },
+    /// Add or remove an internet source, or record an originating experiment.
+    Source(HypothesisSourceArgs),
+    /// Link an experiment that tests this hypothesis.
+    Link {
+        hyp_id: String,
+        #[arg(long)]
+        experiment: String,
+    },
+    /// Remove the testing link to an experiment.
+    Unlink {
+        hyp_id: String,
+        #[arg(long)]
+        experiment: String,
+    },
+    /// Delete a hypothesis that has no children.
+    Delete { hyp_id: String },
+}
+
+#[derive(Args, Debug)]
+pub struct HypothesisSourceArgs {
+    #[command(subcommand)]
+    pub command: HypothesisSourceCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum HypothesisSourceCommand {
+    /// Record what created the hypothesis.
+    Add {
+        hyp_id: String,
+        /// Web page that motivated the claim.
+        #[arg(long)]
+        url: Option<String>,
+        /// Paper id (arXiv or other) that motivated the claim.
+        #[arg(long = "paper-id")]
+        paper_id: Option<String>,
+        /// Display title for an internet source.
+        #[arg(long)]
+        title: Option<String>,
+        /// Why this source created the hypothesis.
+        #[arg(long)]
+        note: Option<String>,
+        /// Experiment whose result created the hypothesis.
+        #[arg(long)]
+        experiment: Option<String>,
+    },
+    /// Remove an internet source by its id.
+    Remove { hyp_id: String, source_id: String },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1020,6 +1121,7 @@ fn command_name(command: &Command) -> &'static str {
         Command::Instance(_) => "instance",
         Command::SshKey(_) => "ssh-key",
         Command::Exp(_) => "exp",
+        Command::Hypothesis(_) => "hypothesis",
         Command::Skill(_) => "skill",
         Command::Skills(_) => "skills",
         Command::Templates(_) => "templates",
@@ -1070,6 +1172,7 @@ async fn dispatch(command: Command) -> error::Result<()> {
             SshKeyCommand::List => commands::ssh_key::list().await,
         },
         Command::Exp(args) => commands::exp::run(args).await,
+        Command::Hypothesis(args) => commands::hypothesis::run(args).await,
         Command::Skill(args) => commands::skill::run(args).await,
         Command::Skills(args) => commands::library::skills(args),
         Command::Templates(args) => commands::library::templates(args),
