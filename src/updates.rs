@@ -32,8 +32,8 @@ pub mod macos_app;
 #[cfg(windows)]
 pub(crate) mod windows;
 
-/// GitHub repo the released binaries come from.
-pub const REPO_URL: &str = "https://github.com/alphaXiv/OpenResearch";
+/// GitHub repo published releases and auto-update assets come from.
+pub const REPO_URL: &str = "https://github.com/SUPERustam/OpenResearch";
 
 /// The cargo-dist app name (the *package* name, not the `orx` bin name) — used
 /// in release asset names and the receipt path.
@@ -458,10 +458,10 @@ pub fn auto_update_eligible() -> bool {
 /// The one-liner that reinstalls orx through the release installer.
 const INSTALL_HINT: &str = if cfg!(windows) {
     "powershell -ExecutionPolicy Bypass -c \"irm \
-https://github.com/alphaXiv/OpenResearch/releases/latest/download/openresearch-cli-installer.ps1 | iex\""
+https://github.com/SUPERustam/OpenResearch/releases/latest/download/openresearch-cli-installer.ps1 | iex\""
 } else {
     "curl --proto '=https' --tlsv1.2 -LsSf \
-https://github.com/alphaXiv/OpenResearch/releases/latest/download/openresearch-cli-installer.sh | sh"
+https://github.com/SUPERustam/OpenResearch/releases/latest/download/openresearch-cli-installer.sh | sh"
 };
 
 /// Confirm a directory can be written before an update commits to it — root-owned
@@ -1255,7 +1255,7 @@ mod tests {
         app_bundle_root, attempt_backoff, attempt_due, bold, detect_channel, exe_matches_prefix,
         now_unix, package_manager_owns, parse_manifest, portable_dir, precedence, relaunch_args,
         relaunch_target, render, retired_path, warning_for, CheckCache, InstallChannel,
-        ATTEMPT_BACKOFF_MAX, ATTEMPT_BACKOFF_MIN,
+        ATTEMPT_BACKOFF_MAX, ATTEMPT_BACKOFF_MIN, INSTALL_HINT, REPO_URL,
     };
     use semver::Version;
     use std::ffi::OsString;
@@ -1514,6 +1514,16 @@ mod tests {
             ["up", "--port", "1", "--no-browser"]
         );
         assert_eq!(args(&["up", "--no-browser"]), ["up", "--no-browser"]);
+    }
+
+    #[test]
+    fn release_assets_come_from_the_fork() {
+        assert_eq!(REPO_URL, "https://github.com/SUPERustam/OpenResearch");
+        assert!(INSTALL_HINT.contains(
+            "https://github.com/SUPERustam/OpenResearch/releases/latest/download/openresearch-cli-installer."
+        ));
+        assert!(!REPO_URL.contains("alphaXiv"));
+        assert!(!INSTALL_HINT.contains("alphaXiv"));
     }
 
     #[test]
