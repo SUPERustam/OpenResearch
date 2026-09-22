@@ -16,7 +16,7 @@ import {
   useOrxEventStream,
 } from "../events";
 import { queryClient, workspaceScope, isCurrentScope, deletedSessionIds } from "./client";
-import { listProjectsQuery, listRunsQuery, listExperimentsQuery } from "./projects";
+import { listProjectsQuery, listRunsQuery, listExperimentsQuery, listHypothesesQuery } from "./projects";
 import { listChatSessionsQuery } from "./chat";
 
 import { artifactFamilies, liveFamilies, invalidateFamilies, removeSession } from "./invalidation";
@@ -49,6 +49,15 @@ export function QueryEvents() {
       invalidateFamilies(["getProjectStarterPrompts"], scope, (query) => query.queryKey[3] === experiment.projectId);
       invalidateFamilies(["getExperimentDiff"], scope, (query) => query.queryKey[3] === experiment.id);
       invalidateFamilies(["getRunDiff"], scope, (query) => queryClient.getQueryData(listRunsQuery(experiment.projectId).queryKey)?.some((run) => run.experimentId === experiment.id && run.id === query.queryKey[3]) ?? false);
+    },
+    onHypothesis(hypothesis) {
+      if (!isCurrentScope(scope)) return;
+      markLiveUpdate(queryClient, listHypothesesQuery(hypothesis.projectId).queryKey, hypothesis.id);
+      queryClient.setQueryData(listHypothesesQuery(hypothesis.projectId).queryKey, (rows) => upsert(rows, hypothesis));
+    },
+    onHypothesisDeleted(event) {
+      if (!isCurrentScope(scope)) return;
+      queryClient.setQueryData(listHypothesesQuery(event.projectId).queryKey, (rows) => rows?.filter((row) => row.id !== event.id));
     },
     onProject(project) {
       if (!isCurrentScope(scope)) return;

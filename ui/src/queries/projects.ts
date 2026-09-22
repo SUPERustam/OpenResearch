@@ -77,6 +77,12 @@ export const listExperimentsQuery = (projectId: string) => queryOptions({
   staleTime: 30_000,
 });
 
+export const listHypothesesQuery = (projectId: string) => queryOptions({
+  queryKey: workspaceKey("listHypotheses", projectId),
+  queryFn: ({ signal, client, queryKey }) => readLiveSnapshot(client, queryKey, () => api.listHypotheses(projectId, signal), mergeLiveList),
+  staleTime: 30_000,
+});
+
 export const listRunsQuery = (projectId: string) => queryOptions({
   queryKey: workspaceKey("listRuns", projectId),
   queryFn: ({ signal, client, queryKey }) => readLiveSnapshot(client, queryKey, () => api.listRuns(projectId, signal), mergeLiveList),

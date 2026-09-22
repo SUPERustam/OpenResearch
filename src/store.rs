@@ -455,6 +455,37 @@ impl Store {
                 chat_session_id      TEXT,
                 UNIQUE(project_id, slug)
             );
+            CREATE TABLE IF NOT EXISTS local_hypotheses (
+                id                    TEXT PRIMARY KEY,
+                project_id            TEXT NOT NULL,
+                parent_hypothesis_id  TEXT,
+                slug                  TEXT NOT NULL,
+                title                 TEXT,
+                description           TEXT,
+                status                TEXT NOT NULL DEFAULT 'open',
+                created_at            INTEGER NOT NULL,
+                updated_at            INTEGER NOT NULL,
+                chat_session_id       TEXT,
+                UNIQUE(project_id, slug)
+            );
+            CREATE TABLE IF NOT EXISTS hypothesis_sources (
+                id             TEXT PRIMARY KEY,
+                hypothesis_id  TEXT NOT NULL,
+                title          TEXT,
+                url            TEXT,
+                paper_id       TEXT,
+                note           TEXT,
+                created_at     INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS hypothesis_experiments (
+                id             TEXT PRIMARY KEY,
+                hypothesis_id  TEXT NOT NULL,
+                experiment_id  TEXT NOT NULL,
+                role           TEXT NOT NULL,
+                note           TEXT,
+                created_at     INTEGER NOT NULL,
+                UNIQUE(hypothesis_id, experiment_id, role)
+            );
             DROP TABLE IF EXISTS local_reports;
             CREATE TABLE IF NOT EXISTS chat_sessions (
                 id                TEXT PRIMARY KEY,
@@ -1686,6 +1717,20 @@ impl Store {
         self.conn
             .execute("DELETE FROM runs WHERE project_id = ?1", params![id])?;
         self.conn.execute(
+            "DELETE FROM hypothesis_sources WHERE hypothesis_id IN
+               (SELECT id FROM local_hypotheses WHERE project_id = ?1)",
+            params![id],
+        )?;
+        self.conn.execute(
+            "DELETE FROM hypothesis_experiments WHERE hypothesis_id IN
+               (SELECT id FROM local_hypotheses WHERE project_id = ?1)",
+            params![id],
+        )?;
+        self.conn.execute(
+            "DELETE FROM local_hypotheses WHERE project_id = ?1",
+            params![id],
+        )?;
+        self.conn.execute(
             "DELETE FROM local_experiments WHERE project_id = ?1",
             params![id],
         )?;
@@ -1778,6 +1823,224 @@ impl Store {
             ],
         )?;
         Ok(())
+    }
+
+    // --- hypotheses --------------------------------------------------------
+
+    pub fn insert_hypothesis(
+        &self,
+        hypothesis: &crate::local::model::LocalHypothesis,
+    ) -> Result<()> {
+        self.conn.execute(
+            &format!(
+                "INSERT INTO local_hypotheses ({HYPOTHESIS_COLS}) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
+            ),
+            params![
+                hypothesis.id,
+                hypothesis.project_id,
+                hypothesis.parent_hypothesis_id,
+                hypothesis.slug,
+                hypothesis.title,
+                hypothesis.description,
+                hypothesis.status,
+                hypothesis.created_at,
+                hypothesis.updated_at,
+                hypothesis.chat_session_id,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_hypothesis(&self, id: &str) -> Result<Option<crate::local::model::LocalHypothesis>> {
+        Ok(self
+            .conn
+            .query_row(
+                &format!("SELECT {HYPOTHESIS_COLS} FROM local_hypotheses WHERE id = ?1"),
+                params![id],
+                crate::local::model::LocalHypothesis::from_row,
+            )
+            .optional()?)
+    }
+
+    pub fn list_hypotheses_by_project(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<crate::local::model::LocalHypothesis>> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {HYPOTHESIS_COLS} FROM local_hypotheses \
+             WHERE project_id = ?1 ORDER BY created_at ASC"
+        ))?;
+        let rows = stmt.query_map(
+            params![project_id],
+            crate::local::model::LocalHypothesis::from_row,
+        )?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    pub fn update_hypothesis(
+        &self,
+        hypothesis: &crate::local::model::LocalHypothesis,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE local_hypotheses SET parent_hypothesis_id = ?2, slug = ?3, title = ?4,
+                    description = ?5, status = ?6, updated_at = ?7
+             WHERE id = ?1",
+            params![
+                hypothesis.id,
+                hypothesis.parent_hypothesis_id,
+                hypothesis.slug,
+                hypothesis.title,
+                hypothesis.description,
+                hypothesis.status,
+                hypothesis.updated_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn touch_hypothesis(&self, id: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE local_hypotheses SET updated_at = ?2 WHERE id = ?1",
+            params![id, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    pub fn hypothesis_has_children(&self, id: &str) -> Result<bool> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM local_hypotheses WHERE parent_hypothesis_id = ?1",
+            params![id],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    pub fn delete_hypothesis(&self, id: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM hypothesis_sources WHERE hypothesis_id = ?1",
+            params![id],
+        )?;
+        self.conn.execute(
+            "DELETE FROM hypothesis_experiments WHERE hypothesis_id = ?1",
+            params![id],
+        )?;
+        self.conn
+            .execute("DELETE FROM local_hypotheses WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn insert_hypothesis_source(
+        &self,
+        source: &crate::local::model::HypothesisSource,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO hypothesis_sources
+                (id, hypothesis_id, title, url, paper_id, note, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                source.id,
+                source.hypothesis_id,
+                source.title,
+                source.url,
+                source.paper_id,
+                source.note,
+                source.created_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_hypothesis_sources_by_project(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<crate::local::model::HypothesisSource>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT s.id, s.hypothesis_id, s.title, s.url, s.paper_id, s.note, s.created_at
+             FROM hypothesis_sources s
+             JOIN local_hypotheses h ON h.id = s.hypothesis_id
+             WHERE h.project_id = ?1
+             ORDER BY s.created_at ASC",
+        )?;
+        let rows = stmt.query_map(
+            params![project_id],
+            crate::local::model::HypothesisSource::from_row,
+        )?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    pub fn delete_hypothesis_source(&self, hypothesis_id: &str, source_id: &str) -> Result<bool> {
+        let n = self.conn.execute(
+            "DELETE FROM hypothesis_sources WHERE id = ?1 AND hypothesis_id = ?2",
+            params![source_id, hypothesis_id],
+        )?;
+        Ok(n > 0)
+    }
+
+    pub fn insert_hypothesis_link(
+        &self,
+        link: &crate::local::model::HypothesisExperimentRef,
+    ) -> Result<()> {
+        self.conn
+            .execute(
+                "INSERT INTO hypothesis_experiments
+                    (id, hypothesis_id, experiment_id, role, note, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    link.id,
+                    link.hypothesis_id,
+                    link.experiment_id,
+                    link.role,
+                    link.note,
+                    link.created_at,
+                ],
+            )
+            .map_err(|err| {
+                if err.to_string().contains("UNIQUE") {
+                    anyhow!(
+                        "Experiment {} is already linked as {}.",
+                        link.experiment_id,
+                        link.role
+                    )
+                } else {
+                    crate::error::Error::from(err)
+                }
+            })?;
+        Ok(())
+    }
+
+    pub fn list_hypothesis_links_by_project(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<crate::local::model::HypothesisExperimentRef>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT l.id, l.hypothesis_id, l.experiment_id, l.role, l.note,
+                    e.slug, e.title, l.created_at
+             FROM hypothesis_experiments l
+             JOIN local_hypotheses h ON h.id = l.hypothesis_id
+             LEFT JOIN local_experiments e ON e.id = l.experiment_id
+             WHERE h.project_id = ?1
+             ORDER BY l.created_at ASC",
+        )?;
+        let rows = stmt.query_map(
+            params![project_id],
+            crate::local::model::HypothesisExperimentRef::from_row,
+        )?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    pub fn delete_hypothesis_link(
+        &self,
+        hypothesis_id: &str,
+        experiment_id: &str,
+        role: &str,
+    ) -> Result<bool> {
+        let n = self.conn.execute(
+            "DELETE FROM hypothesis_experiments
+             WHERE hypothesis_id = ?1 AND experiment_id = ?2 AND role = ?3",
+            params![hypothesis_id, experiment_id, role],
+        )?;
+        Ok(n > 0)
     }
 
     // --- chat sessions / messages ------------------------------------------
@@ -3049,6 +3312,9 @@ const PROJECT_COLS: &str = "id, name, slug, github_owner, github_repo, github_sy
 const EXPERIMENT_COLS: &str = "id, project_id, parent_experiment_id, slug, branch_name, \
                                title, description, run_command, agent_status, created_at, \
                                updated_at, chat_session_id";
+
+const HYPOTHESIS_COLS: &str = "id, project_id, parent_hypothesis_id, slug, title, description, \
+                               status, created_at, updated_at, chat_session_id";
 
 fn row_to_run(row: &rusqlite::Row<'_>) -> std::result::Result<StoredRun, rusqlite::Error> {
     Ok(StoredRun {

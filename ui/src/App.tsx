@@ -16,7 +16,7 @@ import {
 } from "react";
 
 import { listChatSessionsQuery, getChatMessagesQuery } from "./queries/chat";
-import { listProjectsQuery, getUiStateQuery, listRunsQuery, listExperimentsQuery } from "./queries/projects";
+import { listProjectsQuery, getUiStateQuery, listRunsQuery, listExperimentsQuery, listHypothesesQuery } from "./queries/projects";
 import { getArtifactsQuery } from "./queries/files";
 import { useBlocker, useRouter, useRouterState } from "@tanstack/react-router";
 import {
@@ -118,6 +118,9 @@ import { Md } from "./components/Md";
 import { SettingsView, type SettingsTab } from "./components/SettingsPage";
 import { DemoWelcomeModal } from "./components/Tour";
 import { TreeView } from "./components/TreeView";
+import { HypothesisTree } from "./components/HypothesisTree";
+import { HypothesisTable } from "./components/HypothesisTable";
+import { HypothesisOverview } from "./components/HypothesisOverview";
 import { onChatEvent, useOrxEvents } from "./events";
 import { closeTab, openTab, type TabOpenIntent } from "./tabPreview";
 import { Button, IconButton, MenuItem, showAlert, Spinner } from "./components/ui";
@@ -332,6 +335,8 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
   const persistedPreferredAgent = useRef<AgentSelection | null>(null);
   const experimentsQuery = useQuery(listExperimentsQuery(projectId));
   const experiments = experimentsQuery.data ?? [];
+  const hypothesesQuery = useQuery(listHypothesesQuery(projectId));
+  const hypotheses = hypothesesQuery.data ?? [];
   const experimentDataReady = !experimentsQuery.isPending;
   const [runDataReady, setRunDataReady] = useState(false);
   const runsQuery = useQuery(listRunsQuery(projectId));
@@ -355,6 +360,9 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
   const artifacts = artifactsQuery.data ?? null;
 
   const [view, setView] = useState<ExperimentsView>("table");
+  const [researchCanvas, setResearchCanvas] = useState<"experiments" | "hypotheses">("experiments");
+  const [selectedHypothesisId, setSelectedHypothesisId] = useState<string | null>(null);
+  const [hypothesisViewport, setHypothesisViewport] = useState<Viewport | null>(null);
   // Experiments pane scope: "agent" narrows to the open chat session's work.
   // Falls back to "project" whenever there is no usable experiment attribution.
   const [scope, setScope] = useState<"agent" | "project">("project");
@@ -374,6 +382,14 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
     const mine = new Set(scopedExperiments.map((experiment) => experiment.id));
     return runs.filter((r) => mine.has(r.experimentId));
   }, [runs, scopedExperiments, effectiveScope]);
+  const scopedHypotheses = useMemo(() => {
+    if (effectiveScope !== "agent") return hypotheses;
+    return hypotheses.filter((hypothesis) => !hypothesis.chatSessionId || hypothesis.chatSessionId === activeSessionId);
+  }, [hypotheses, effectiveScope, activeSessionId]);
+  const selectedHypothesis = scopedHypotheses.find((hypothesis) => hypothesis.id === selectedHypothesisId) ?? null;
+  const selectedHypothesisParent = selectedHypothesis?.parentHypothesisId
+    ? hypotheses.find((hypothesis) => hypothesis.id === selectedHypothesis.parentHypothesisId) ?? null
+    : null;
 
   // Right-panel tab strip: closable home and working tabs. The same experiment
   // can keep both its overview and terminal open.
@@ -1750,6 +1766,28 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
                 <div className="pane-toolbar flex shrink-0 flex-wrap items-center gap-2 bg-background px-3 pt-2.5 pb-2">
                   <span className="flex-1" />
                   <div className="experiments-toolbar-controls inline-flex items-center gap-[5px]">
+                    <div
+                      className="seg inline-flex items-center gap-0.5 rounded-md bg-hover-subtle p-0.5 [&_button]:rounded-sm [&_button]:px-2 [&_button]:py-0.5 [&_button]:text-sm [&_button]:font-medium [&_button]:text-text [&_button.active]:bg-background [&_button.active]:shadow-segment"
+                      role="group"
+                      aria-label={m.app_hypothesis_canvas()}
+                    >
+                      <button
+                        type="button"
+                        className={researchCanvas === "experiments" ? "active" : ""}
+                        aria-pressed={researchCanvas === "experiments"}
+                        onClick={() => setResearchCanvas("experiments")}
+                      >
+                        {m.app_experiments()}
+                      </button>
+                      <button
+                        type="button"
+                        className={researchCanvas === "hypotheses" ? "active" : ""}
+                        aria-pressed={researchCanvas === "hypotheses"}
+                        onClick={() => setResearchCanvas("hypotheses")}
+                      >
+                        {m.app_hypotheses()}
+                      </button>
+                    </div>
                     <div className="option-picker relative inline-flex" ref={scopeMenuRef}>
                       <IconButton size="small"
                         ref={scopeTriggerRef}
@@ -1818,7 +1856,33 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
                   </div>
                 </div>
                 <div className="pane-content flex-1 min-h-0 relative bg-background">
-                  {view === "tree" ? (
+                  {researchCanvas === "hypotheses" ? (
+                    <>
+                      {view === "tree" ? (
+                        <HypothesisTree
+                          hypotheses={scopedHypotheses}
+                          runs={runs}
+                          onSelect={setSelectedHypothesisId}
+                          onOpenExperiment={(experimentId) => openExperimentTab(experimentId, "overview", "keepOpen")}
+                          viewport={hypothesisViewport}
+                          onViewportChange={setHypothesisViewport}
+                        />
+                      ) : (
+                        <HypothesisTable
+                          hypotheses={scopedHypotheses}
+                          onOpen={(hypothesis) => setSelectedHypothesisId(hypothesis.id)}
+                        />
+                      )}
+                      {selectedHypothesis && (
+                        <HypothesisOverview
+                          hypothesis={selectedHypothesis}
+                          parent={selectedHypothesisParent}
+                          onOpenExperiment={(experimentId) => openExperimentTab(experimentId, "overview", "keepOpen")}
+                          onClose={() => setSelectedHypothesisId(null)}
+                        />
+                      )}
+                    </>
+                  ) : view === "tree" ? (
                     activeProject && (
                       <TreeView
                         experiments={experiments}

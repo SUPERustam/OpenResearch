@@ -9,6 +9,7 @@ import type {
   ChatSession,
   ContextUsage,
   Experiment,
+  Hypothesis,
   OverleafLiveStatus,
   Project,
   QueuedMessage,
@@ -193,6 +194,8 @@ const REOPEN_AFTER_MS = 3_000;
 export interface OrxEventHandlers {
   onRun: (run: Run) => void;
   onExperiment?: (experiment: Experiment) => void;
+  onHypothesis?: (hypothesis: Hypothesis) => void;
+  onHypothesisDeleted?: (event: { id: string; projectId: string }) => void;
   onProject?: (project: Project) => void;
   onReconnect?: () => void;
   /** The project's artifacts changed on disk — refetch the listing. */
@@ -276,6 +279,17 @@ export function useOrxEventStream(handlers: OrxEventHandlers) {
           emitProjectActivityEvent();
           ref.current.onExperiment?.(d.experiment);
         }
+      });
+      es.addEventListener("hypothesis.updated", (e) => {
+        const d = parse<{ hypothesis: Hypothesis }>(e as MessageEvent);
+        if (d?.hypothesis) {
+          emitProjectActivityEvent();
+          ref.current.onHypothesis?.(d.hypothesis);
+        }
+      });
+      es.addEventListener("hypothesis.deleted", (e) => {
+        const d = parse<{ id: string; projectId: string }>(e as MessageEvent);
+        if (d?.id) ref.current.onHypothesisDeleted?.(d);
       });
       es.addEventListener("project.updated", (e) => {
         const d = parse<{ project: Project }>(e as MessageEvent);
