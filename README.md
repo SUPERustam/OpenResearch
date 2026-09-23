@@ -1,6 +1,6 @@
 <div align="center">
 
-<h1><img src=".github/readme-assets/openresearch.svg" alt="" width="36" /> OpenResearch</h1>
+<h1><img src=".github/readme-assets/openresearch.svg" alt="" width="36" /> CoHyp</h1>
 
 **The local-first workspace for research agents and autoresearch.**
 
@@ -11,9 +11,9 @@
 literature, develop hypotheses, run experiments, and produce research artifacts.</p>
 
 <p>
-<a href="https://github.com/SUPERustam/OpenResearch/releases/latest/download/OpenResearch.dmg"><picture><source media="(prefers-color-scheme: dark)" srcset=".github/readme-assets/download-macos-dark.svg"><img src=".github/readme-assets/download-macos.svg" alt="Download OpenResearch for macOS" width="220" height="44" /></picture></a>
-<a href="https://github.com/SUPERustam/OpenResearch/releases/latest/download/openresearch-cli-x86_64-pc-windows-msvc.zip"><picture><source media="(prefers-color-scheme: dark)" srcset=".github/readme-assets/download-windows-dark.svg"><img src=".github/readme-assets/download-windows.svg" alt="Download OpenResearch for Windows (Beta)" width="220" height="44" /></picture></a>
-<a href="#get-started"><picture><source media="(prefers-color-scheme: dark)" srcset=".github/readme-assets/install-linux-centered-dark.svg"><img src=".github/readme-assets/install-linux-centered.svg" alt="Install OpenResearch for Linux" width="220" height="44" /></picture></a>
+<a href="https://github.com/SUPERustam/OpenResearch/releases/latest/download/openresearch-cli-installer.sh"><picture><source media="(prefers-color-scheme: dark)" srcset=".github/readme-assets/download-macos-dark.svg"><img src=".github/readme-assets/download-macos.svg" alt="Download CoHyp for macOS" width="220" height="44" /></picture></a>
+<a href="https://github.com/SUPERustam/OpenResearch/releases/latest/download/openresearch-cli-x86_64-pc-windows-msvc.zip"><picture><source media="(prefers-color-scheme: dark)" srcset=".github/readme-assets/download-windows-dark.svg"><img src=".github/readme-assets/download-windows.svg" alt="Download CoHyp for Windows (Beta)" width="220" height="44" /></picture></a>
+<a href="#get-started"><picture><source media="(prefers-color-scheme: dark)" srcset=".github/readme-assets/install-linux-centered-dark.svg"><img src=".github/readme-assets/install-linux-centered.svg" alt="Install CoHyp for Linux" width="220" height="44" /></picture></a>
 </p>
 
 <p>
@@ -30,10 +30,10 @@ literature, develop hypotheses, run experiments, and produce research artifacts.
 
 ## Get started
 
-Install the CLI on macOS or Linux, then launch OpenResearch:
+Install the CLI on macOS or Linux, then launch CoHyp:
 
 ```sh
-curl -LsSf https://openresearch.sh/install.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/SUPERustam/OpenResearch/releases/latest/download/openresearch-cli-installer.sh | sh
 orx up
 ```
 

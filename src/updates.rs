@@ -32,7 +32,7 @@ pub mod macos_app;
 #[cfg(windows)]
 pub(crate) mod windows;
 
-/// GitHub repo published releases and auto-update assets come from.
+/// GitHub repo the released binaries come from.
 pub const REPO_URL: &str = "https://github.com/SUPERustam/OpenResearch";
 
 /// The cargo-dist app name (the *package* name, not the `orx` bin name) — used
@@ -455,7 +455,7 @@ pub fn auto_update_eligible() -> bool {
             .unwrap_or(false)
 }
 
-/// The one-liner that reinstalls orx through the release installer.
+/// The one-liner that reinstalls orx through this repo's release installer.
 const INSTALL_HINT: &str = if cfg!(windows) {
     "powershell -ExecutionPolicy Bypass -c \"irm \
 https://github.com/SUPERustam/OpenResearch/releases/latest/download/openresearch-cli-installer.ps1 | iex\""
@@ -1261,6 +1261,12 @@ mod tests {
     use std::ffi::OsString;
     use std::path::Path;
     use std::path::PathBuf;
+
+    #[test]
+    fn install_hint_downloads_from_this_repo() {
+        assert!(INSTALL_HINT.contains(REPO_URL));
+        assert!(INSTALL_HINT.contains("openresearch-cli-installer."));
+    }
 
     #[test]
     fn render_sets_off_the_warning_in_its_own_block() {
