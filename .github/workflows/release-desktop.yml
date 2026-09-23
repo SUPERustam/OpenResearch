@@ -65,7 +65,7 @@ jobs:
           if [ -n "${INPUT_TAG}" ]; then
             tag="${INPUT_TAG}"
           else
-            tag="$(gh release view --json tagName --jq .tagName)"
+            tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)"
           fi
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
 
