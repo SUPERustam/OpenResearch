@@ -33,7 +33,7 @@ pub mod macos_app;
 pub(crate) mod windows;
 
 /// GitHub repo the released binaries come from.
-pub const REPO_URL: &str = "https://github.com/alphaXiv/OpenResearch";
+pub const REPO_URL: &str = "https://github.com/SUPERustam/OpenResearch";
 
 /// The cargo-dist app name (the *package* name, not the `orx` bin name) — used
 /// in release asset names and the receipt path.
@@ -455,13 +455,13 @@ pub fn auto_update_eligible() -> bool {
             .unwrap_or(false)
 }
 
-/// The one-liner that reinstalls orx through the release installer.
+/// The one-liner that reinstalls orx through this repo's release installer.
 const INSTALL_HINT: &str = if cfg!(windows) {
     "powershell -ExecutionPolicy Bypass -c \"irm \
-https://github.com/alphaXiv/OpenResearch/releases/latest/download/openresearch-cli-installer.ps1 | iex\""
+https://github.com/SUPERustam/OpenResearch/releases/latest/download/openresearch-cli-installer.ps1 | iex\""
 } else {
     "curl --proto '=https' --tlsv1.2 -LsSf \
-https://github.com/alphaXiv/OpenResearch/releases/latest/download/openresearch-cli-installer.sh | sh"
+https://github.com/SUPERustam/OpenResearch/releases/latest/download/openresearch-cli-installer.sh | sh"
 };
 
 /// Confirm a directory can be written before an update commits to it — root-owned
@@ -1255,12 +1255,18 @@ mod tests {
         app_bundle_root, attempt_backoff, attempt_due, bold, detect_channel, exe_matches_prefix,
         now_unix, package_manager_owns, parse_manifest, portable_dir, precedence, relaunch_args,
         relaunch_target, render, retired_path, warning_for, CheckCache, InstallChannel,
-        ATTEMPT_BACKOFF_MAX, ATTEMPT_BACKOFF_MIN,
+        ATTEMPT_BACKOFF_MAX, ATTEMPT_BACKOFF_MIN, INSTALL_HINT, REPO_URL,
     };
     use semver::Version;
     use std::ffi::OsString;
     use std::path::Path;
     use std::path::PathBuf;
+
+    #[test]
+    fn install_hint_downloads_from_this_repo() {
+        assert!(INSTALL_HINT.contains(REPO_URL));
+        assert!(INSTALL_HINT.contains("openresearch-cli-installer."));
+    }
 
     #[test]
     fn render_sets_off_the_warning_in_its_own_block() {
