@@ -22,6 +22,12 @@ on:
         required: true
         default: v0.2.7
         type: string
+  # Editing this file on main builds the latest release's missing archives.
+  # workflow_dispatch is the way to target a specific tag later.
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/release-desktop.yml
 
 permissions:
   contents: write
@@ -48,13 +54,28 @@ jobs:
             target: x86_64-pc-windows-msvc
             asset: openresearch-cli-x86_64-pc-windows-msvc.zip
     steps:
+      - name: Resolve the release tag
+        id: tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_TAG}" ]; then
+            tag="${INPUT_TAG}"
+          else
+            tag="$(gh release view --json tagName --jq .tagName)"
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
       - name: Enable Windows long paths
         if: runner.os == 'Windows'
         run: git config --global core.longpaths true
 
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ steps.tag.outputs.tag }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -82,7 +103,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
           archive="target/distrib/${{ matrix.asset }}"
