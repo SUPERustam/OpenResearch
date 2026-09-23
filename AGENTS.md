@@ -6,6 +6,8 @@
 
 This GitHub repo (`SUPERustam/OpenResearch`) is a fork of [`alphaXiv/OpenResearch`](https://github.com/alphaXiv/OpenResearch). Treat it as a **drop-in replacement for OpenResearch**: port and stay compatible with upstream behavior; do not invent fork-only product surfaces unless asked. Package version stays put unless someone is cutting a release.
 
+Self-update does **not** follow upstream. `orx update`, background auto-update, the macOS app manifest, remote installs, and cargo-dist releases all come from this fork (`REPO_URL` in `src/updates.rs`, `repository` in `Cargo.toml`). `build.rs` may also accept an alphaXiv Actions run for the production channel; that does not change the download URL. Literature search still uses alphaXiv.
+
 `openresearch.sh` is the companion service. It owns the website and documentation, accounts and organizations, sandbox provisioning, and managed-compute catalogs. Research projects, experiments, runs, logs, and artifacts remain local to `orx`.
 
 When changing authentication, organization, sandbox, or managed-compute APIs, inspect the corresponding `openresearch.sh` implementation and keep both sides compatible. Do not edit the companion repository unless it is explicitly in scope.

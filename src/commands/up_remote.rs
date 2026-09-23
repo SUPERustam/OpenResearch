@@ -2405,7 +2405,8 @@ mod tests {
         let command = remote_login_orx_cmd(&remote_installer("1.2.3"));
         assert!(command.contains("github.com/SUPERustam/OpenResearch"));
         assert!(command.contains("openresearch-cli-installer.sh"));
-        assert!(command.contains("/releases/download/v1.2.3/"));
+        assert!(command
+            .contains("https://github.com/SUPERustam/OpenResearch/releases/download/v1.2.3/"));
         assert!(!command.contains("releases/latest"));
         assert!(command.contains("${CARGO_HOME:-$HOME/.cargo}/bin"));
     }

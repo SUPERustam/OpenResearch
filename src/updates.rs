@@ -1523,6 +1523,16 @@ mod tests {
     }
 
     #[test]
+    fn release_assets_come_from_the_fork() {
+        assert_eq!(REPO_URL, "https://github.com/SUPERustam/OpenResearch");
+        assert!(INSTALL_HINT.contains(
+            "https://github.com/SUPERustam/OpenResearch/releases/latest/download/openresearch-cli-installer."
+        ));
+        assert!(!REPO_URL.contains("alphaXiv"));
+        assert!(!INSTALL_HINT.contains("alphaXiv"));
+    }
+
+    #[test]
     fn parses_dist_manifest() {
         let body = r#"{
             "dist_version": "0.32.0",
