@@ -11,9 +11,9 @@
 literature, develop hypotheses, run experiments, and produce research artifacts.</p>
 
 <p>
-<a href="https://github.com/SUPERustam/OpenResearch/releases/latest/download/openresearch-cli-installer.sh"><picture><source media="(prefers-color-scheme: dark)" srcset=".github/readme-assets/download-macos-dark.svg"><img src=".github/readme-assets/download-macos.svg" alt="Download CoHyp for macOS" width="220" height="44" /></picture></a>
-<a href="https://github.com/SUPERustam/OpenResearch/releases/latest/download/openresearch-cli-x86_64-pc-windows-msvc.zip"><picture><source media="(prefers-color-scheme: dark)" srcset=".github/readme-assets/download-windows-dark.svg"><img src=".github/readme-assets/download-windows.svg" alt="Download CoHyp for Windows (Beta)" width="220" height="44" /></picture></a>
-<a href="#get-started"><picture><source media="(prefers-color-scheme: dark)" srcset=".github/readme-assets/install-linux-centered-dark.svg"><img src=".github/readme-assets/install-linux-centered.svg" alt="Install CoHyp for Linux" width="220" height="44" /></picture></a>
+<a href="https://github.com/SUPERustam/OpenResearch/releases/latest/download/install.sh"><picture><source media="(prefers-color-scheme: dark)" srcset=".github/readme-assets/download-macos-dark.svg"><img src=".github/readme-assets/download-macos.svg" alt="Download CoHyp for macOS" width="168" height="34" /></picture></a>
+<a href="https://github.com/SUPERustam/OpenResearch/releases/latest/download/windows.zip"><picture><source media="(prefers-color-scheme: dark)" srcset=".github/readme-assets/download-windows-dark.svg"><img src=".github/readme-assets/download-windows.svg" alt="Download CoHyp for Windows" width="168" height="34" /></picture></a>
+<a href="#get-started"><picture><source media="(prefers-color-scheme: dark)" srcset=".github/readme-assets/install-linux-centered-dark.svg"><img src=".github/readme-assets/install-linux-centered.svg" alt="Install CoHyp for Linux" width="168" height="34" /></picture></a>
 </p>
 
 <p>
@@ -33,7 +33,7 @@ literature, develop hypotheses, run experiments, and produce research artifacts.
 Install the CLI on macOS or Linux, then launch CoHyp:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/SUPERustam/OpenResearch/releases/latest/download/openresearch-cli-installer.sh | sh
+curl -LsSf https://github.com/SUPERustam/OpenResearch/releases/latest/download/install.sh | sh
 orx up
 ```
 

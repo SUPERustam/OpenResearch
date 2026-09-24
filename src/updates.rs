@@ -458,10 +458,10 @@ pub fn auto_update_eligible() -> bool {
 /// The one-liner that reinstalls orx through this repo's release installer.
 const INSTALL_HINT: &str = if cfg!(windows) {
     "powershell -ExecutionPolicy Bypass -c \"irm \
-https://github.com/SUPERustam/OpenResearch/releases/latest/download/openresearch-cli-installer.ps1 | iex\""
+https://github.com/SUPERustam/OpenResearch/releases/latest/download/install.ps1 | iex\""
 } else {
-    "curl --proto '=https' --tlsv1.2 -LsSf \
-https://github.com/SUPERustam/OpenResearch/releases/latest/download/openresearch-cli-installer.sh | sh"
+    "curl -LsSf \
+https://github.com/SUPERustam/OpenResearch/releases/latest/download/install.sh | sh"
 };
 
 /// Confirm a directory can be written before an update commits to it — root-owned
@@ -1265,7 +1265,7 @@ mod tests {
     #[test]
     fn install_hint_downloads_from_this_repo() {
         assert!(INSTALL_HINT.contains(REPO_URL));
-        assert!(INSTALL_HINT.contains("openresearch-cli-installer."));
+        assert!(INSTALL_HINT.contains("/download/install."));
     }
 
     #[test]
