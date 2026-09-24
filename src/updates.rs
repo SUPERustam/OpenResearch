@@ -1526,7 +1526,7 @@ mod tests {
     fn release_assets_come_from_the_fork() {
         assert_eq!(REPO_URL, "https://github.com/SUPERustam/OpenResearch");
         assert!(INSTALL_HINT.contains(
-            "https://github.com/SUPERustam/OpenResearch/releases/latest/download/openresearch-cli-installer."
+            "https://github.com/SUPERustam/OpenResearch/releases/latest/download/install."
         ));
         assert!(!REPO_URL.contains("alphaXiv"));
         assert!(!INSTALL_HINT.contains("alphaXiv"));
