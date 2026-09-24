@@ -314,18 +314,6 @@ jobs:
           # Write and read notes from a file to avoid quoting breaking things
           echo "$ANNOUNCEMENT_BODY" > $RUNNER_TEMP/notes.txt
 
-          # Short names for the README download links. The installer script
-          # still fetches the cargo-dist archive names.
-          if [ -f artifacts/openresearch-cli-installer.sh ]; then
-            cp artifacts/openresearch-cli-installer.sh artifacts/install.sh
-          fi
-          if [ -f artifacts/openresearch-cli-installer.ps1 ]; then
-            cp artifacts/openresearch-cli-installer.ps1 artifacts/install.ps1
-          fi
-          if [ -f artifacts/openresearch-cli-x86_64-pc-windows-msvc.zip ]; then
-            cp artifacts/openresearch-cli-x86_64-pc-windows-msvc.zip artifacts/windows.zip
-          fi
-
           gh release create "${{ needs.plan.outputs.tag }}" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
 
   announce:
