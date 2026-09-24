@@ -1,6 +1,6 @@
 [package]
 name = "openresearch-cli"
-version = "0.2.7"
+version = "0.2.8"
 edition = "2021"
 description = "CoHyp CLI (orx) — Rust port of OpenResearch"
 repository = "https://github.com/SUPERustam/OpenResearch"
