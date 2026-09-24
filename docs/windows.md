@@ -25,8 +25,8 @@ The nanochat demo installs `uv`, and with it Python, on its first run.
 
 ## Install
 
-From [Releases](https://github.com/SUPERustam/OpenResearch/releases), download
-`openresearch-cli-x86_64-pc-windows-msvc.zip`, extract it, and double-click
+From [Releases](https://github.com/SUPERustam/OpenResearch/releases/latest/download/windows.zip), download
+`windows.zip`, extract it, and double-click
 `orx.exe`. It starts the dashboard at `http://127.0.0.1:4791` and opens your
 browser. Leave the console window open — closing it stops the server. If orx
 cannot start, a dialog says why.
@@ -35,7 +35,7 @@ To have `orx` on your `PATH` as a command instead, run the PowerShell installer,
 which installs to `%USERPROFILE%\.cargo\bin`:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/SUPERustam/OpenResearch/releases/latest/download/openresearch-cli-installer.ps1 | iex"
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/SUPERustam/OpenResearch/releases/latest/download/install.ps1 | iex"
 ```
 
 Either install updates itself. `orx update`, or the Updates section of the
