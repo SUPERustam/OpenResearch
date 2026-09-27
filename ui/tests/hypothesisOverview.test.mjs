@@ -55,7 +55,9 @@ test("child overview renders the parent title as an in-app link", () => {
     onOpenHypothesis: () => {},
     onClose: () => {},
   }));
-  assert.match(html, /<button[^>]*underline[^>]*>G1: high-dimensional cube passes practical shape-loss equivalence<\/button>/);
+  const parentButton = html.match(/<button[^>]*>G1: high-dimensional cube passes practical shape-loss equivalence<\/button>/);
+  assert.ok(parentButton, "parent title is a button");
+  assert.doesNotMatch(parentButton[0], /underline/);
   assert.match(html, /VISReg G1 cube equivalence test/);
   assert.match(html, /VISReg follow-up K4096 cube test/);
 });

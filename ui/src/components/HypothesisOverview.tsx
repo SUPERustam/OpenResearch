@@ -66,7 +66,7 @@ export function HypothesisOverview({
               <li>
                 <button
                   type="button"
-                  className="w-full rounded-sm px-1 py-0.5 text-start text-sm text-text underline underline-offset-2 hover:bg-surface"
+                  className="w-full rounded-sm px-1 py-0.5 text-start text-sm text-text hover:bg-surface"
                   onClick={() => onOpenHypothesis(parent.id)}
                 >
                   {parent.title?.trim() || parent.slug}
