@@ -79,6 +79,7 @@ export function QueryEvents() {
       if (!isCurrentScope(scope)) return;
       if (event.type === "session") markLiveUpdate(queryClient, listChatSessionsQuery(event.session.projectId).queryKey, event.session.id);
       else if (event.type === "busy" || event.type === "usage") markLiveUpdate(queryClient, [...scope, "listChatSessions"], event.sessionId);
+      if (event.type === "message") invalidateFamilies(["listChatAttachments"], scope);
       if (event.type === "message" || event.type === "queued" || event.type === "branch") {
         dispatchChat("", event.type === "message"
           ? { type: "upsertMessage", sessionId: event.sessionId, message: event.message }

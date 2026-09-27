@@ -2597,6 +2597,31 @@ impl Store {
         }
     }
 
+    /// User-message parts that may reference a saved chat attachment, newest first.
+    /// The caller parses `parts_json` and drops anything that is not still a file.
+    pub fn list_project_chat_attachment_parts(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<ProjectAttachmentPart>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT m.parts_json, m.created_at, s.title
+             FROM chat_messages m
+             JOIN chat_sessions s ON s.id = m.session_id
+             WHERE s.project_id = ?1 AND m.role = 'user'
+               AND instr(m.parts_json, '\"image\"') > 0
+             ORDER BY m.created_at DESC
+             LIMIT 2000",
+        )?;
+        let rows = stmt.query_map(params![project_id], |row| {
+            Ok(ProjectAttachmentPart {
+                parts_json: row.get(0)?,
+                created_at: row.get(1)?,
+                session_title: row.get(2)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
     pub fn list_chat_messages(&self, session_id: &str) -> Result<Vec<StoredChatMessage>> {
         let mut stmt = self.conn.prepare(
             // rowid tiebreak: a user message and its reply can share a millisecond.
@@ -2873,6 +2898,14 @@ pub struct StoredUiState {
     pub tour_completed: bool,
     pub preferred_agent: Option<StoredAgentSelection>,
     pub workspace: Option<GlobalWorkspaceState>,
+}
+
+/// One user message that may reference saved chat attachments.
+#[derive(Debug, Clone)]
+pub struct ProjectAttachmentPart {
+    pub parts_json: String,
+    pub created_at: i64,
+    pub session_title: Option<String>,
 }
 
 /// Normalized transcript entry; `parts_json` is the wire-format parts array
