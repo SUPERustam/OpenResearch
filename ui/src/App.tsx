@@ -1878,6 +1878,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
                           hypothesis={selectedHypothesis}
                           parent={selectedHypothesisParent}
                           onOpenExperiment={(experimentId) => openExperimentTab(experimentId, "overview", "keepOpen")}
+                          onOpenHypothesis={setSelectedHypothesisId}
                           onClose={() => setSelectedHypothesisId(null)}
                         />
                       )}

@@ -24,11 +24,13 @@ export function HypothesisOverview({
   hypothesis,
   parent,
   onOpenExperiment,
+  onOpenHypothesis,
   onClose,
 }: {
   hypothesis: Hypothesis;
   parent: Hypothesis | null;
   onOpenExperiment: (experimentId: string) => void;
+  onOpenHypothesis: (hypothesisId: string) => void;
   onClose: () => void;
 }) {
   const origins = hypothesis.experiments.filter((link) => link.role === "origin");
@@ -59,7 +61,21 @@ export function HypothesisOverview({
         </section>
         <section className="mt-5 border-t border-border pt-4">
           <h3 className="m-0 mb-2 text-sm font-semibold text-text">{m.hypothesis_parent()}</h3>
-          <p className="m-0 text-subtext">{parent ? parent.title?.trim() || parent.slug : m.hypothesis_root()}</p>
+          {parent ? (
+            <ul className="m-0 flex list-none flex-col gap-1 p-0">
+              <li>
+                <button
+                  type="button"
+                  className="w-full rounded-sm px-1 py-0.5 text-start text-sm text-text underline underline-offset-2 hover:bg-surface"
+                  onClick={() => onOpenHypothesis(parent.id)}
+                >
+                  {parent.title?.trim() || parent.slug}
+                </button>
+              </li>
+            </ul>
+          ) : (
+            <p className="m-0 text-subtext">{m.hypothesis_root()}</p>
+          )}
         </section>
         <section className="mt-5 border-t border-border pt-4">
           <h3 className="m-0 mb-2 text-sm font-semibold text-text">{m.hypothesis_internet_sources()}</h3>
