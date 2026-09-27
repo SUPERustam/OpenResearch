@@ -22,6 +22,8 @@ Same stacked-bush rule as experiments. Before you parent X under Y, name what Y 
 - You can name it → X is a **child** of Y.
 - X and Y are co-equal alternatives → they are **siblings** (both roots, or both children of the same parent). A missing `--parent` always creates a root. It does not attach to the oldest root.
 
+In the dashboard, the Parent title opens that parent. It uses the same plain button style as the experiment rows. A root shows Parent as plain text.
+
 Re-read before adding nodes:
 
 ```sh

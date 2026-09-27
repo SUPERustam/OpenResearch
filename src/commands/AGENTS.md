@@ -10,6 +10,10 @@ pub async fn run(args: crate::<Args>) -> crate::error::Result<()>
 - Local research commands read the local store. Account / org / sandbox / managed-compute commands call `crate::error::require_credentials().await` themselves.
 - Return `Ok(())`; `main` prints errors. Do not talk to `openresearch.sh` from local-only paths.
 
+## `orx hypothesis` (`hypothesis.rs`)
+
+Claims, internet sources, originating experiments, and testing-experiment links. No branch, run command, or checkout. Plan mode may list and read. Writes stay outside the plan gate.
+
 ## `orx up` (`up.rs`)
 
 One axum process on loopback:

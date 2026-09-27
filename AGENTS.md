@@ -46,6 +46,8 @@ Per-experiment **Artifacts** belongs next to Logs and Code on the tree card, hov
 
 Preserve OpenCode **V1/V2** protocol detection, DB migration safeguards, and first-run installation. See `src/local/harness/AGENTS.md` before changing them.
 
+**Hypotheses are a second tree of claims.** No git branch, run command, logs, or code checkout. The experiments pane toggles Experiments | Hypotheses. In the overview, the Parent title opens that parent and uses the same plain button style as the experiment rows. Internet sources stay the underlined external links. A root shows Parent as plain text. Command: `orx hypothesis`. Skill: `agent-skills/orx-hypothesis-tree/SKILL.md`.
+
 ## Working rules for agents
 
 - One overlapping feature → one branch/PR. Close duplicates only after the surviving PR exists.
