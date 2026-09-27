@@ -2,6 +2,10 @@
 
 Projects, experiments, chats, and runs for `orx up` live in the local store; IDs resolve only when the row exists there. Hosted integrations include `openresearch.rs` (managed compute), `ssh_identity.rs` (registered SSH keys), and `starter.rs` (paper context through the literature client).
 
+## Hypotheses (`hypotheses.rs`)
+
+Tables: `local_hypotheses`, `hypothesis_sources`, `hypothesis_experiments`. Project delete cascades them before experiments. Cross-project parents and cycles are rejected. Delete fails while children exist.
+
 ## Artifacts (`files.rs`)
 
 - Disk: `<data dir>/files/<project slug>/`. Product name is Artifacts; physical dir stays `files/` (legacy `artifacts/` is migrated only when `files/` is missing).

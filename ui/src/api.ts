@@ -88,6 +88,43 @@ export interface Experiment {
   chatSessionId?: string | null;
 }
 
+export interface HypothesisSource {
+  id: string;
+  hypothesisId: string;
+  title?: string | null;
+  url?: string | null;
+  paperId?: string | null;
+  note?: string | null;
+  createdAt: number;
+}
+
+export interface HypothesisExperimentLink {
+  id: string;
+  hypothesisId: string;
+  experimentId: string;
+  role: "origin" | "test" | string;
+  note?: string | null;
+  experimentSlug: string;
+  experimentTitle?: string | null;
+  createdAt: number;
+}
+
+/** A claim on the hypothesis tree, with the sources that created it and the experiments that test it. */
+export interface Hypothesis {
+  id: string;
+  projectId: string;
+  parentHypothesisId?: string | null;
+  slug: string;
+  title?: string | null;
+  description?: string | null;
+  status: string;
+  createdAt: number;
+  updatedAt: number;
+  chatSessionId?: string | null;
+  sources: HypothesisSource[];
+  experiments: HypothesisExperimentLink[];
+}
+
 export type RunStatus = "starting" | "running" | "done" | "failed" | "cancelled";
 export type RunDisplayStatus = RunStatus | "cancelling";
 
@@ -371,6 +408,11 @@ export const deleteProject = (projectId: string) =>
 export const listExperiments = (projectId: string, signal?: AbortSignal) =>
   get<{ experiments: Experiment[] }>(`/api/projects/${projectId}/experiments`, signal).then(
     (r) => r.experiments,
+  );
+
+export const listHypotheses = (projectId: string, signal?: AbortSignal) =>
+  get<{ hypotheses: Hypothesis[] }>(`/api/projects/${projectId}/hypotheses`, signal).then(
+    (r) => r.hypotheses,
   );
 
 export const listRuns = (projectId: string, signal?: AbortSignal) =>

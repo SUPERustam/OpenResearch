@@ -111,3 +111,119 @@ impl LocalExperiment {
         }
     }
 }
+
+/// Agent-set verdict for a hypothesis. Run outcomes stay on linked experiments.
+pub const HYPOTHESIS_STATUSES: &[&str] =
+    &["open", "testing", "supported", "refuted", "inconclusive"];
+
+pub fn is_hypothesis_status(status: &str) -> bool {
+    HYPOTHESIS_STATUSES.contains(&status)
+}
+
+/// A claim node on the hypothesis tree. No branch and no run command —
+/// those stay on the experiment that tests the claim.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalHypothesis {
+    pub id: String,
+    pub project_id: String,
+    pub parent_hypothesis_id: Option<String>,
+    pub slug: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub status: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub chat_session_id: Option<String>,
+}
+
+impl LocalHypothesis {
+    pub(crate) fn from_row(row: &rusqlite::Row<'_>) -> std::result::Result<Self, rusqlite::Error> {
+        Ok(Self {
+            id: row.get(0)?,
+            project_id: row.get(1)?,
+            parent_hypothesis_id: row.get(2)?,
+            slug: row.get(3)?,
+            title: row.get(4)?,
+            description: row.get(5)?,
+            status: row.get(6)?,
+            created_at: row.get(7)?,
+            updated_at: row.get(8)?,
+            chat_session_id: row.get(9)?,
+        })
+    }
+
+    pub fn display_name(&self) -> &str {
+        match self.title.as_deref() {
+            Some(t) if !t.trim().is_empty() => t,
+            _ => &self.slug,
+        }
+    }
+}
+
+/// An internet source that motivated a hypothesis. At least one of `url` or
+/// `paper_id` is set.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HypothesisSource {
+    pub id: String,
+    pub hypothesis_id: String,
+    pub title: Option<String>,
+    pub url: Option<String>,
+    pub paper_id: Option<String>,
+    pub note: Option<String>,
+    pub created_at: i64,
+}
+
+impl HypothesisSource {
+    pub(crate) fn from_row(row: &rusqlite::Row<'_>) -> std::result::Result<Self, rusqlite::Error> {
+        Ok(Self {
+            id: row.get(0)?,
+            hypothesis_id: row.get(1)?,
+            title: row.get(2)?,
+            url: row.get(3)?,
+            paper_id: row.get(4)?,
+            note: row.get(5)?,
+            created_at: row.get(6)?,
+        })
+    }
+}
+
+/// An experiment that motivated (`origin`) or tests (`test`) a hypothesis.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HypothesisExperimentRef {
+    pub id: String,
+    pub hypothesis_id: String,
+    pub experiment_id: String,
+    pub role: String,
+    pub note: Option<String>,
+    pub experiment_slug: String,
+    pub experiment_title: Option<String>,
+    pub created_at: i64,
+}
+
+impl HypothesisExperimentRef {
+    pub(crate) fn from_row(row: &rusqlite::Row<'_>) -> std::result::Result<Self, rusqlite::Error> {
+        Ok(Self {
+            id: row.get(0)?,
+            hypothesis_id: row.get(1)?,
+            experiment_id: row.get(2)?,
+            role: row.get(3)?,
+            note: row.get(4)?,
+            experiment_slug: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
+            experiment_title: row.get(6)?,
+            created_at: row.get(7)?,
+        })
+    }
+}
+
+/// Hypothesis plus its sources and experiment links, the shape the API serves.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HypothesisDocument {
+    #[serde(flatten)]
+    pub hypothesis: LocalHypothesis,
+    pub sources: Vec<HypothesisSource>,
+    pub experiments: Vec<HypothesisExperimentRef>,
+}

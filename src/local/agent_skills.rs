@@ -94,6 +94,7 @@ const COMPUTE_RESOURCES: &[AgentSkillResource] = &[
     },
 ];
 const EXPERIMENT_TREE: &str = include_str!("../../agent-skills/orx-experiment-tree/SKILL.md");
+const HYPOTHESIS_TREE: &str = include_str!("../../agent-skills/orx-hypothesis-tree/SKILL.md");
 const GIT: &str = include_str!("../../agent-skills/orx-git/SKILL.md");
 const AGENT_DELEGATION: &str = include_str!("../../agent-skills/orx-agent-delegation/SKILL.md");
 const LIT: &str = include_str!("../../agent-skills/orx-lit-review/SKILL.md");
@@ -147,6 +148,7 @@ const FIGURES_RESOURCES: &[AgentSkillResource] = &[
 
 const D_COMPUTE: &str = "Launch and monitor experiment runs and route guidance for hf, modal, k8s/Kubernetes, ssh, slurm, ray, OpenResearch, Tinker, and local backends. Covers the fixed run contract, sizing, cancellation, and wait versus wake. Use before any launch or relaunch, when authoring a k8s manifest, choosing or switching compute, or handling an OOM, stall, or timeout; then read one backend reference.";
 const D_EXPERIMENT_TREE: &str = "Plan and drive the experiment tree: first-launch setup, fixed run contract, frozen nodes, stacked-bush tree shape, branch/launch/wait/promote, repair limits, notes, and turn summaries. Use before creating or changing experiments, launching a first run, deciding what to try next, handling a completed run, or reporting experiment progress.";
+const D_HYPOTHESIS_TREE: &str = "Record and maintain the hypothesis tree: claims, internet sources, originating experiments, and experiments that test each claim. Use before stating a hypothesis, attaching literature or a finished experiment as its source, linking experiments that test it, or updating hypothesis status.";
 
 const S_COMPUTE: AgentSkill = AgentSkill {
     name: "orx-compute",
@@ -158,6 +160,12 @@ const S_EXPERIMENT_TREE: AgentSkill = AgentSkill {
     name: "orx-experiment-tree",
     description: D_EXPERIMENT_TREE,
     content: EXPERIMENT_TREE,
+    resources: &[],
+};
+const S_HYPOTHESIS_TREE: AgentSkill = AgentSkill {
+    name: "orx-hypothesis-tree",
+    description: D_HYPOTHESIS_TREE,
+    content: HYPOTHESIS_TREE,
     resources: &[],
 };
 const S_GIT: AgentSkill = AgentSkill {
@@ -227,6 +235,7 @@ pub fn skills(set: SkillSet) -> Vec<&'static AgentSkill> {
     match set {
         SkillSet::Local => vec![
             &S_EXPERIMENT_TREE,
+            &S_HYPOTHESIS_TREE,
             &S_GIT,
             &S_AGENT_DELEGATION,
             &S_COMPUTE,
@@ -241,6 +250,7 @@ pub fn skills(set: SkillSet) -> Vec<&'static AgentSkill> {
         SkillSet::Full => vec![
             &S_CREATE,
             &S_EXPERIMENT_TREE,
+            &S_HYPOTHESIS_TREE,
             &S_GIT,
             &S_AGENT_DELEGATION,
             &S_COMPUTE,

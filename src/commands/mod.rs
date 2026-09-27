@@ -23,6 +23,7 @@ pub mod delete;
 pub mod discover;
 pub mod exp;
 mod file_serve;
+pub mod hypothesis;
 pub mod install_cli;
 pub mod install_skills;
 pub mod instance;

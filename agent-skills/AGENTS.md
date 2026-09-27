@@ -18,6 +18,8 @@ Preserve existing published paths. Coordinate changes to experiment matching wit
 
 `orx-figures` is required before plotting; default matplotlib output is not acceptable in reports.
 
+`orx-hypothesis-tree` records claims. It does not create experiment branches. Do not put a claim only in an experiment description.
+
 ## Cardinal experiment-tree rules
 
 `SKILL.md` (repo root) and `orx-experiment-tree` are binding for agents *inside* `orx` sessions, not for this CLI codebase — but do not contradict them from playbook or skill text:
