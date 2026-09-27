@@ -2403,8 +2403,10 @@ mod tests {
     #[test]
     fn remote_install_uses_the_release_installer_in_the_login_environment() {
         let command = remote_login_orx_cmd(&remote_installer("1.2.3"));
+        assert!(command.contains("github.com/SUPERustam/OpenResearch"));
         assert!(command.contains("openresearch-cli-installer.sh"));
-        assert!(command.contains("/releases/download/v1.2.3/"));
+        assert!(command
+            .contains("https://github.com/SUPERustam/OpenResearch/releases/download/v1.2.3/"));
         assert!(!command.contains("releases/latest"));
         assert!(command.contains("${CARGO_HOME:-$HOME/.cargo}/bin"));
     }

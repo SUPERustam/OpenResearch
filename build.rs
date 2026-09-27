@@ -7,12 +7,14 @@ fn main() {
         Ok(value)
             if value == "1"
                 && std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true")
-                && std::env::var("GITHUB_REPOSITORY").as_deref() == Ok("alphaXiv/OpenResearch") =>
+                && std::env::var("GITHUB_REPOSITORY")
+                    .as_deref()
+                    .is_ok_and(official_release_repo) =>
         {
             "production"
         }
         Ok(value) if value == "1" => panic!(
-            "ORX_OFFICIAL_RELEASE_BUILD=1 is only valid in alphaXiv/OpenResearch GitHub Actions"
+            "ORX_OFFICIAL_RELEASE_BUILD=1 is only valid in SUPERustam/OpenResearch or alphaXiv/OpenResearch GitHub Actions"
         ),
         Ok(value) => {
             panic!("ORX_OFFICIAL_RELEASE_BUILD must be unset or exactly `1`, got `{value}`")
@@ -24,4 +26,11 @@ fn main() {
     };
 
     println!("cargo:rustc-env=ORX_BUILD_CHANNEL={channel}");
+}
+
+/// Repos whose GitHub Actions may stamp a production release build.
+/// This fork publishes CoHyp downloads; upstream stays accepted so the same
+/// guard still matches an alphaXiv Actions run.
+fn official_release_repo(repo: &str) -> bool {
+    matches!(repo, "SUPERustam/OpenResearch" | "alphaXiv/OpenResearch")
 }

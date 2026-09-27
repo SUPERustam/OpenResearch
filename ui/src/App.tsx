@@ -73,6 +73,7 @@ import {
   Maximize2,
   Minimize2,
   Package,
+  Paperclip,
   ScrollText,
   Terminal,
   Users,
@@ -104,6 +105,7 @@ import { SubagentTab } from "./components/SubagentTab";
 import { CodeTab, type CodeView } from "./components/CodeTab";
 import { WorktreeTab, type WorktreeView } from "./components/WorktreeTab";
 import { ArtifactsTab, findArtifactEntry } from "./components/ArtifactsTab";
+import { ChatAttachmentsTab } from "./components/ChatAttachmentsTab";
 import { SkillsTab } from "./components/SkillsTab";
 import { ClosableTab } from "./components/ClosableTab";
 import { DetailDrawer, type ExperimentView } from "./components/DetailDrawer";
@@ -397,6 +399,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
   const [experimentsTabOpen, setExperimentsTabOpen] = useState(false);
   const [filesTabOpen, setFilesTabOpen] = useState(false);
   const [artifactsTabOpen, setArtifactsTabOpen] = useState(false);
+  const [attachmentsTabOpen, setAttachmentsTabOpen] = useState(false);
   const [terminalTabOpen, setTerminalTabOpen] = useState(false);
   // Which checkout has a live shell; a restored-but-unselected tab spawns nothing until selected.
   const [terminalStartedFor, setTerminalStartedFor] = useState<string | null>(null);
@@ -600,6 +603,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
     experimentsTabOpen,
     filesTabOpen,
     artifactsTabOpen,
+    attachmentsTabOpen,
     terminalTabOpen,
     expTabs,
     fileTabs,
@@ -615,7 +619,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
     panelOpen,
     panelMax,
     treeViewport,
-  }), [rightTab, tabHistory, experimentsTabOpen, filesTabOpen, artifactsTabOpen, terminalTabOpen, expTabs, fileTabs, planTabs, subagentTabs, codeTabs, contentTabOrder, previewTab, filesView, filesToggled, selectedRunId, scope, panelOpen, panelMax, treeViewport]);
+  }), [rightTab, tabHistory, experimentsTabOpen, filesTabOpen, artifactsTabOpen, attachmentsTabOpen, terminalTabOpen, expTabs, fileTabs, planTabs, subagentTabs, codeTabs, contentTabOrder, previewTab, filesView, filesToggled, selectedRunId, scope, panelOpen, panelMax, treeViewport]);
   currentRightPaneStateRef.current = rightPaneState;
   const getFileScroll = useCallback(() => Object.fromEntries(fileScrollPositionsRef.current), []);
   const scrollSaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -630,6 +634,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
     setExperimentsTabOpen(state.experimentsTabOpen);
     setFilesTabOpen(state.filesTabOpen);
     setArtifactsTabOpen(state.artifactsTabOpen);
+    setAttachmentsTabOpen(state.attachmentsTabOpen);
     setTerminalTabOpen(state.terminalTabOpen);
     setExpTabs(state.expTabs);
     setFileTabs(state.fileTabs);
@@ -731,7 +736,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
   // The home, error, and loading screens leave projects populated but show no project.
   useEffect(() => {
     const name = startupError || uiState === null ? null : activeProject?.name;
-    document.title = name ? `${autoDir(name)} — OpenResearch` : "OpenResearch";
+    document.title = name ? `${autoDir(name)} — CoHyp` : "CoHyp";
   }, [startupError, uiState, activeProject]);
 
   const projectIdRef = useRef(projectId);
@@ -880,6 +885,11 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
   const openArtifactsTab = useCallback(() => {
     setArtifactsTabOpen(true);
     selectRightTab("artifacts");
+  }, [selectRightTab]);
+
+  const openAttachmentsTab = useCallback(() => {
+    setAttachmentsTabOpen(true);
+    selectRightTab("attachments");
   }, [selectRightTab]);
 
   const openTerminalTab = useCallback(() => {
@@ -1339,13 +1349,14 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
   }, [selectRightTab]);
 
   const closeHomeTab = useCallback(
-    (tab: "experiments" | "files" | "artifacts" | "terminal") => {
+    (tab: "experiments" | "files" | "artifacts" | "attachments" | "terminal") => {
       if (tab === "experiments") setExperimentsTabOpen(false);
       else if (tab === "files") setFilesTabOpen(false);
       else if (tab === "terminal") {
         setTerminalTabOpen(false);
         setTerminalStartedFor(null);
       }
+      else if (tab === "attachments") setAttachmentsTabOpen(false);
       else setArtifactsTabOpen(false);
       forgetRightTab(tab, rightTab === tab);
     },
@@ -1656,7 +1667,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
             runs={runs}
             onOpenExperiment={(id, runId) => openExperimentTab(id, "overview", "preview", runId)}
             rightOffset={panelOpen ? panelWidth + 28 : undefined}
-            activeView={panelOpen && (rightTab === "files" || rightTab === "artifacts" || rightTab === "experiments" || rightTab === "terminal") ? rightTab : null}
+            activeView={panelOpen && (rightTab === "files" || rightTab === "artifacts" || rightTab === "attachments" || rightTab === "experiments" || rightTab === "terminal") ? rightTab : null}
             projectId={activeProject.id}
             onCompute={() => selectMainView("compute")}
             sessionId={activeSessionId}
@@ -1665,6 +1676,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
             onFiles={() => { setFilesView("files"); openWorktreeTab(); }}
             onTerminal={openTerminalTab}
             onArtifacts={openArtifactsTab}
+            onAttachments={openAttachmentsTab}
             onExperiments={() => openExperimentsTab()}
           />
         )}
@@ -1709,6 +1721,15 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
                     onClose={() => closeHomeTab("artifacts")}
                   />
                 )}
+                {attachmentsTabOpen && (
+                  <ClosableTab
+                    active={rightTab === "attachments"}
+                    label={m.app_attachments()}
+                    icon={<Paperclip size={12} className="shrink-0" />}
+                    onSelect={() => selectRightTab("attachments")}
+                    onClose={() => closeHomeTab("attachments")}
+                  />
+                )}
                 {experimentsTabOpen && (
                   <ClosableTab
                     active={rightTab === "experiments"}
@@ -1747,6 +1768,10 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
               || (requestedCodeTab && !codeExperiment)
               || (pane && "sessionId" in pane && pane.sessionId && !sessions?.includes(pane.sessionId)) ? (
               <TabBody><div className="p-6 text-subtext">{m.model_picker_unavailable()}</div></TabBody>
+            ) : rightTab === "attachments" ? (
+              <TabBody>
+                {activeProject && <ChatAttachmentsTab projectId={activeProject.id} />}
+              </TabBody>
             ) : rightTab === "artifacts" ? (
               <TabBody>
                 {activeProject && (

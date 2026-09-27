@@ -130,6 +130,40 @@ jobs:
           path: target/release/orx.exe
           if-no-files-found: error
 
+  macos:
+    name: macos build, test
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Build
+        run: cargo build --locked
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Build release
+        if: ${{ !inputs.plan }}
+        run: cargo build --release --locked
+
+      - name: Upload orx
+        if: ${{ !inputs.plan }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: orx-macos-aarch64
+          path: target/release/orx
+          if-no-files-found: error
+
   # Guards the version-bump release flow (release-on-bump.yml): the version in
   # Cargo.toml may only move forward, may not reuse an already-released tag,
   # and a bump must come with a regenerated Cargo.lock. Catching these here
