@@ -36,7 +36,7 @@ private to this chat session.
 
 ## Start here
 
-Use `orx` as the source of truth for the experiment tree, runs, and logs. Use
+Use `orx` as the source of truth for the experiment tree, the hypothesis tree, runs, and logs. Use
 normal repository tools for code and file inspection. Use this project id
 (`{id}`) for every `orx` command that takes one.
 

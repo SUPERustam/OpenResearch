@@ -282,6 +282,11 @@ fn is_readonly_orx(tokens: &[&str], stage: &str) -> bool {
             Some("desc") => !stage.contains("--set") && !stage.contains("--stdin"),
             _ => false,
         },
+        "hypothesis" => match subcommand(&mut rest) {
+            Some("list" | "status") => true,
+            Some("desc") => !stage.contains("--set") && !stage.contains("--stdin"),
+            _ => false,
+        },
 
         // Everything else — create-*, instance, login/logout, install-skills,
         // update, serve, supervise, up, and any unrecognized future verb — is
@@ -449,6 +454,9 @@ mod tests {
         // The playbook's core orientation reads (view form).
         assert!(allowed("orx exp desc e-1"));
         assert!(allowed("orx exp wait e-1"));
+        assert!(allowed("orx hypothesis list p-1"));
+        assert!(allowed("orx hypothesis status h-1"));
+        assert!(allowed("orx hypothesis desc h-1"));
     }
 
     #[test]
@@ -460,6 +468,9 @@ mod tests {
         // `desc` becomes a write with --set/--stdin → gated.
         assert!(!allowed("orx exp desc e-1 --set \"found X\""));
         assert!(!allowed("orx exp desc e-1 --stdin"));
+        assert!(!allowed("orx hypothesis create p-1 --title x"));
+        assert!(!allowed("orx hypothesis desc h-1 --set \"claim\""));
+        assert!(!allowed("orx hypothesis link h-1 --experiment e-1"));
     }
 
     #[test]
@@ -698,7 +709,7 @@ mod tests {
             );
         }
         // The verbs with mixed read/write subcommands must also be real.
-        for verb in ["project", "exp"] {
+        for verb in ["project", "exp", "hypothesis"] {
             assert!(real.contains(verb), "`{verb}` is not a real orx command");
         }
     }

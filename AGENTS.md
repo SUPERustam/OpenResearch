@@ -6,6 +6,8 @@
 
 This GitHub repo (`SUPERustam/OpenResearch`) is a fork of [`alphaXiv/OpenResearch`](https://github.com/alphaXiv/OpenResearch). Treat it as a **drop-in replacement for OpenResearch**: port and stay compatible with upstream behavior; do not invent fork-only product surfaces unless asked. Package version stays put unless someone is cutting a release.
 
+Self-update does **not** follow upstream. `orx update`, background auto-update, the macOS app manifest, remote installs, and cargo-dist releases all come from this fork (`REPO_URL` in `src/updates.rs`, `repository` in `Cargo.toml`). `build.rs` may also accept an alphaXiv Actions run for the production channel; that does not change the download URL. Literature search still uses alphaXiv.
+
 `openresearch.sh` is the companion service. It owns the website and documentation, accounts and organizations, sandbox provisioning, and managed-compute catalogs. Research projects, experiments, runs, logs, and artifacts remain local to `orx`.
 
 When changing authentication, organization, sandbox, or managed-compute APIs, inspect the corresponding `openresearch.sh` implementation and keep both sides compatible. Do not edit the companion repository unless it is explicitly in scope.
@@ -43,6 +45,8 @@ Read this guide and each nested guide along the path you are editing. Paths belo
 Per-experiment **Artifacts** belongs next to Logs and Code on the tree card, hover card, experiment overview, and table row. The control is a **portal file list** (`ExperimentArtifactsMenu`) that opens a file through `openArtifactFileTab`. It must not navigate to the global sidebar Artifacts tab. Always show the button; no unique match shows **No matching artifacts** — never dump the whole project tree.
 
 Preserve OpenCode **V1/V2** protocol detection, DB migration safeguards, and first-run installation. See `src/local/harness/AGENTS.md` before changing them.
+
+**Hypotheses are a second tree of claims.** No git branch, run command, logs, or code checkout. The experiments pane toggles Experiments | Hypotheses. In the overview, the Parent title opens that parent and uses the same plain button style as the experiment rows. Internet sources stay the underlined external links. A root shows Parent as plain text. Command: `orx hypothesis`. Skill: `agent-skills/orx-hypothesis-tree/SKILL.md`.
 
 ## Working rules for agents
 

@@ -88,6 +88,43 @@ export interface Experiment {
   chatSessionId?: string | null;
 }
 
+export interface HypothesisSource {
+  id: string;
+  hypothesisId: string;
+  title?: string | null;
+  url?: string | null;
+  paperId?: string | null;
+  note?: string | null;
+  createdAt: number;
+}
+
+export interface HypothesisExperimentLink {
+  id: string;
+  hypothesisId: string;
+  experimentId: string;
+  role: "origin" | "test" | string;
+  note?: string | null;
+  experimentSlug: string;
+  experimentTitle?: string | null;
+  createdAt: number;
+}
+
+/** A claim on the hypothesis tree, with the sources that created it and the experiments that test it. */
+export interface Hypothesis {
+  id: string;
+  projectId: string;
+  parentHypothesisId?: string | null;
+  slug: string;
+  title?: string | null;
+  description?: string | null;
+  status: string;
+  createdAt: number;
+  updatedAt: number;
+  chatSessionId?: string | null;
+  sources: HypothesisSource[];
+  experiments: HypothesisExperimentLink[];
+}
+
 export type RunStatus = "starting" | "running" | "done" | "failed" | "cancelled";
 export type RunDisplayStatus = RunStatus | "cancelling";
 
@@ -371,6 +408,11 @@ export const deleteProject = (projectId: string) =>
 export const listExperiments = (projectId: string, signal?: AbortSignal) =>
   get<{ experiments: Experiment[] }>(`/api/projects/${projectId}/experiments`, signal).then(
     (r) => r.experiments,
+  );
+
+export const listHypotheses = (projectId: string, signal?: AbortSignal) =>
+  get<{ hypotheses: Hypothesis[] }>(`/api/projects/${projectId}/hypotheses`, signal).then(
+    (r) => r.hypotheses,
   );
 
 export const listRuns = (projectId: string, signal?: AbortSignal) =>
@@ -1979,6 +2021,22 @@ export interface ChatTextAnnotation {
 export const chatAttachmentUrl = (name: string) =>
   `/api/chat/attachments/${encodeURIComponent(name)}`;
 
+/** An image or PDF already saved from a chat in this project. */
+export interface ChatAttachmentRecord {
+  fileName: string;
+  displayName: string;
+  mediaType: string;
+  size: number;
+  createdAt: number;
+  sessionTitle?: string | null;
+}
+
+export const listChatAttachments = (projectId: string, signal?: AbortSignal) =>
+  get<{ attachments: ChatAttachmentRecord[] }>(
+    `/api/projects/${projectId}/chat-attachments`,
+    signal,
+  );
+
 /** Returns immediately; the turn streams over /api/events (chat.* events). */
 export const sendChatMessage = (
   sessionId: string,
@@ -1988,6 +2046,7 @@ export const sendChatMessage = (
   annotations?: ChatTextAnnotation[],
   clientTurnId?: string,
   mode?: "steer",
+  existingFiles?: string[],
 ) =>
   post<{ ok: boolean; turn?: ChatTurnResult; steered?: boolean }>(
     `/api/chat/sessions/${sessionId}/message`, {
@@ -1999,6 +2058,7 @@ export const sendChatMessage = (
     planMode: opts.planMode,
     reasoningLevel: opts.reasoningLevel,
     images,
+    existingFiles,
     annotations,
     mode,
   },

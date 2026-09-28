@@ -24,14 +24,12 @@
 # This never increments a version: the version is always a human decision made
 # in a reviewed PR, and "merge a PR that bumps Cargo.toml" is the release act.
 #
-# The trigger is the version *changing* in a push, so exactly one run can
-# dispatch a given release and later pushes will not retry it. If that run fails
-# or never dispatches, re-run it (Actions -> this workflow -> the failed run ->
-# Re-run): a re-run replays the original event, `github.event.before` included,
-# so the guard below still sees the bump. Prefer that over dispatching
-# release.yml by hand, whose `tag` input defaults to `dry-run` (which publishes
-# nothing but reports success) and which builds from main's current tip rather
-# than the bump commit.
+# The trigger is the version *changing* in a push, so a later push of the same
+# version does not start a second release while the first is still publishing.
+# If that run fails before the tag exists, a later push retries: the tag check
+# below dispatches when v<version> is missing and no Release run is in flight.
+# Prefer that over dispatching release.yml by hand, whose `tag` input defaults
+# to `dry-run` (which publishes nothing but reports success).
 
 name: Release on version bump
 
@@ -81,27 +79,39 @@ jobs:
           version=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
           tag="v${version}"
 
-          # Did this push change the version? The tag check below can't stand
-          # alone: the tag is only created when the release publishes, minutes
-          # after dispatch, so every push during a build would dispatch a
-          # duplicate — from a different commit, making the released content a
-          # race. An unreadable previous head (force push, first commit) leaves
-          # `previous` empty and falls through to the tag check.
+          # Did this push change the version? The tag is only created when the
+          # release publishes, so a same-version push during a build must not
+          # start another one. An unreadable previous head (force push, first
+          # commit) leaves `previous` empty and falls through to the tag check.
           previous=""
           if [ -n "${BEFORE}" ] && [ "${BEFORE}" != "0000000000000000000000000000000000000000" ] \
             && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
             previous=$(git show "${BEFORE}:Cargo.toml" 2>/dev/null \
               | grep -m1 '^version = ' | sed -E 's/version = "(.*)"/\1/' || true)
           fi
-          if [ -n "${previous}" ] && [ "${previous}" = "${version}" ]; then
-            echo "Version unchanged at ${version} in this push — nothing to release."
-            exit 0
-          fi
-
           if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
             echo "Tag ${tag} already exists — nothing to release."
             echo "(If you meant to cut a release, bump the version in Cargo.toml.)"
             exit 0
+          fi
+
+          # Same version and no tag: a release is still publishing, or the last
+          # attempt failed before GitHub created the tag. Only the second case
+          # should dispatch again.
+          if [ -n "${previous}" ] && [ "${previous}" = "${version}" ]; then
+            in_flight=$(GH_TOKEN="$FALLBACK_TOKEN" gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow release.yml \
+              --branch main \
+              --event workflow_dispatch \
+              --limit 10 \
+              --json status \
+              --jq '[.[] | select(.status=="in_progress" or .status=="queued" or .status=="waiting" or .status=="pending" or .status=="requested")] | length')
+            if [ "${in_flight}" != "0" ]; then
+              echo "Version unchanged at ${version} and a Release run is already in flight — not dispatching another."
+              exit 0
+            fi
+            echo "Version unchanged at ${version}, but tag ${tag} was never published. Retrying."
           fi
 
           # Mark the bump's PR with a shared "version-bump" label so releases

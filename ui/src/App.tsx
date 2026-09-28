@@ -16,7 +16,7 @@ import {
 } from "react";
 
 import { listChatSessionsQuery, getChatMessagesQuery } from "./queries/chat";
-import { listProjectsQuery, getUiStateQuery, listRunsQuery, listExperimentsQuery } from "./queries/projects";
+import { listProjectsQuery, getUiStateQuery, listRunsQuery, listExperimentsQuery, listHypothesesQuery } from "./queries/projects";
 import { getArtifactsQuery } from "./queries/files";
 import { useBlocker, useRouter, useRouterState } from "@tanstack/react-router";
 import {
@@ -73,6 +73,7 @@ import {
   Maximize2,
   Minimize2,
   Package,
+  Paperclip,
   ScrollText,
   Terminal,
   Users,
@@ -104,6 +105,7 @@ import { SubagentTab } from "./components/SubagentTab";
 import { CodeTab, type CodeView } from "./components/CodeTab";
 import { WorktreeTab, type WorktreeView } from "./components/WorktreeTab";
 import { ArtifactsTab, findArtifactEntry } from "./components/ArtifactsTab";
+import { ChatAttachmentsTab } from "./components/ChatAttachmentsTab";
 import { SkillsTab } from "./components/SkillsTab";
 import { ClosableTab } from "./components/ClosableTab";
 import { DetailDrawer, type ExperimentView } from "./components/DetailDrawer";
@@ -118,6 +120,9 @@ import { Md } from "./components/Md";
 import { SettingsView, type SettingsTab } from "./components/SettingsPage";
 import { DemoWelcomeModal } from "./components/Tour";
 import { TreeView } from "./components/TreeView";
+import { HypothesisTree } from "./components/HypothesisTree";
+import { HypothesisTable } from "./components/HypothesisTable";
+import { HypothesisOverview } from "./components/HypothesisOverview";
 import { onChatEvent, useOrxEvents } from "./events";
 import { closeTab, openTab, type TabOpenIntent } from "./tabPreview";
 import { Button, IconButton, MenuItem, showAlert, Spinner } from "./components/ui";
@@ -332,6 +337,8 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
   const persistedPreferredAgent = useRef<AgentSelection | null>(null);
   const experimentsQuery = useQuery(listExperimentsQuery(projectId));
   const experiments = experimentsQuery.data ?? [];
+  const hypothesesQuery = useQuery(listHypothesesQuery(projectId));
+  const hypotheses = hypothesesQuery.data ?? [];
   const experimentDataReady = !experimentsQuery.isPending;
   const [runDataReady, setRunDataReady] = useState(false);
   const runsQuery = useQuery(listRunsQuery(projectId));
@@ -355,6 +362,9 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
   const artifacts = artifactsQuery.data ?? null;
 
   const [view, setView] = useState<ExperimentsView>("table");
+  const [researchCanvas, setResearchCanvas] = useState<"experiments" | "hypotheses">("experiments");
+  const [selectedHypothesisId, setSelectedHypothesisId] = useState<string | null>(null);
+  const [hypothesisViewport, setHypothesisViewport] = useState<Viewport | null>(null);
   // Experiments pane scope: "agent" narrows to the open chat session's work.
   // Falls back to "project" whenever there is no usable experiment attribution.
   const [scope, setScope] = useState<"agent" | "project">("project");
@@ -374,6 +384,14 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
     const mine = new Set(scopedExperiments.map((experiment) => experiment.id));
     return runs.filter((r) => mine.has(r.experimentId));
   }, [runs, scopedExperiments, effectiveScope]);
+  const scopedHypotheses = useMemo(() => {
+    if (effectiveScope !== "agent") return hypotheses;
+    return hypotheses.filter((hypothesis) => !hypothesis.chatSessionId || hypothesis.chatSessionId === activeSessionId);
+  }, [hypotheses, effectiveScope, activeSessionId]);
+  const selectedHypothesis = scopedHypotheses.find((hypothesis) => hypothesis.id === selectedHypothesisId) ?? null;
+  const selectedHypothesisParent = selectedHypothesis?.parentHypothesisId
+    ? hypotheses.find((hypothesis) => hypothesis.id === selectedHypothesis.parentHypothesisId) ?? null
+    : null;
 
   // Right-panel tab strip: closable home and working tabs. The same experiment
   // can keep both its overview and terminal open.
@@ -381,6 +399,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
   const [experimentsTabOpen, setExperimentsTabOpen] = useState(false);
   const [filesTabOpen, setFilesTabOpen] = useState(false);
   const [artifactsTabOpen, setArtifactsTabOpen] = useState(false);
+  const [attachmentsTabOpen, setAttachmentsTabOpen] = useState(false);
   const [terminalTabOpen, setTerminalTabOpen] = useState(false);
   // Which checkout has a live shell; a restored-but-unselected tab spawns nothing until selected.
   const [terminalStartedFor, setTerminalStartedFor] = useState<string | null>(null);
@@ -584,6 +603,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
     experimentsTabOpen,
     filesTabOpen,
     artifactsTabOpen,
+    attachmentsTabOpen,
     terminalTabOpen,
     expTabs,
     fileTabs,
@@ -599,7 +619,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
     panelOpen,
     panelMax,
     treeViewport,
-  }), [rightTab, tabHistory, experimentsTabOpen, filesTabOpen, artifactsTabOpen, terminalTabOpen, expTabs, fileTabs, planTabs, subagentTabs, codeTabs, contentTabOrder, previewTab, filesView, filesToggled, selectedRunId, scope, panelOpen, panelMax, treeViewport]);
+  }), [rightTab, tabHistory, experimentsTabOpen, filesTabOpen, artifactsTabOpen, attachmentsTabOpen, terminalTabOpen, expTabs, fileTabs, planTabs, subagentTabs, codeTabs, contentTabOrder, previewTab, filesView, filesToggled, selectedRunId, scope, panelOpen, panelMax, treeViewport]);
   currentRightPaneStateRef.current = rightPaneState;
   const getFileScroll = useCallback(() => Object.fromEntries(fileScrollPositionsRef.current), []);
   const scrollSaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -614,6 +634,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
     setExperimentsTabOpen(state.experimentsTabOpen);
     setFilesTabOpen(state.filesTabOpen);
     setArtifactsTabOpen(state.artifactsTabOpen);
+    setAttachmentsTabOpen(state.attachmentsTabOpen);
     setTerminalTabOpen(state.terminalTabOpen);
     setExpTabs(state.expTabs);
     setFileTabs(state.fileTabs);
@@ -715,7 +736,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
   // The home, error, and loading screens leave projects populated but show no project.
   useEffect(() => {
     const name = startupError || uiState === null ? null : activeProject?.name;
-    document.title = name ? `${autoDir(name)} — OpenResearch` : "OpenResearch";
+    document.title = name ? `${autoDir(name)} — CoHyp` : "CoHyp";
   }, [startupError, uiState, activeProject]);
 
   const projectIdRef = useRef(projectId);
@@ -864,6 +885,11 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
   const openArtifactsTab = useCallback(() => {
     setArtifactsTabOpen(true);
     selectRightTab("artifacts");
+  }, [selectRightTab]);
+
+  const openAttachmentsTab = useCallback(() => {
+    setAttachmentsTabOpen(true);
+    selectRightTab("attachments");
   }, [selectRightTab]);
 
   const openTerminalTab = useCallback(() => {
@@ -1323,13 +1349,14 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
   }, [selectRightTab]);
 
   const closeHomeTab = useCallback(
-    (tab: "experiments" | "files" | "artifacts" | "terminal") => {
+    (tab: "experiments" | "files" | "artifacts" | "attachments" | "terminal") => {
       if (tab === "experiments") setExperimentsTabOpen(false);
       else if (tab === "files") setFilesTabOpen(false);
       else if (tab === "terminal") {
         setTerminalTabOpen(false);
         setTerminalStartedFor(null);
       }
+      else if (tab === "attachments") setAttachmentsTabOpen(false);
       else setArtifactsTabOpen(false);
       forgetRightTab(tab, rightTab === tab);
     },
@@ -1640,7 +1667,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
             runs={runs}
             onOpenExperiment={(id, runId) => openExperimentTab(id, "overview", "preview", runId)}
             rightOffset={panelOpen ? panelWidth + 28 : undefined}
-            activeView={panelOpen && (rightTab === "files" || rightTab === "artifacts" || rightTab === "experiments" || rightTab === "terminal") ? rightTab : null}
+            activeView={panelOpen && (rightTab === "files" || rightTab === "artifacts" || rightTab === "attachments" || rightTab === "experiments" || rightTab === "terminal") ? rightTab : null}
             projectId={activeProject.id}
             onCompute={() => selectMainView("compute")}
             sessionId={activeSessionId}
@@ -1649,6 +1676,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
             onFiles={() => { setFilesView("files"); openWorktreeTab(); }}
             onTerminal={openTerminalTab}
             onArtifacts={openArtifactsTab}
+            onAttachments={openAttachmentsTab}
             onExperiments={() => openExperimentsTab()}
           />
         )}
@@ -1693,6 +1721,15 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
                     onClose={() => closeHomeTab("artifacts")}
                   />
                 )}
+                {attachmentsTabOpen && (
+                  <ClosableTab
+                    active={rightTab === "attachments"}
+                    label={m.app_attachments()}
+                    icon={<Paperclip size={12} className="shrink-0" />}
+                    onSelect={() => selectRightTab("attachments")}
+                    onClose={() => closeHomeTab("attachments")}
+                  />
+                )}
                 {experimentsTabOpen && (
                   <ClosableTab
                     active={rightTab === "experiments"}
@@ -1731,6 +1768,10 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
               || (requestedCodeTab && !codeExperiment)
               || (pane && "sessionId" in pane && pane.sessionId && !sessions?.includes(pane.sessionId)) ? (
               <TabBody><div className="p-6 text-subtext">{m.model_picker_unavailable()}</div></TabBody>
+            ) : rightTab === "attachments" ? (
+              <TabBody>
+                {activeProject && <ChatAttachmentsTab projectId={activeProject.id} />}
+              </TabBody>
             ) : rightTab === "artifacts" ? (
               <TabBody>
                 {activeProject && (
@@ -1750,6 +1791,28 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
                 <div className="pane-toolbar flex shrink-0 flex-wrap items-center gap-2 bg-background px-3 pt-2.5 pb-2">
                   <span className="flex-1" />
                   <div className="experiments-toolbar-controls inline-flex items-center gap-[5px]">
+                    <div
+                      className="seg inline-flex items-center gap-0.5 rounded-md bg-hover-subtle p-0.5 [&_button]:rounded-sm [&_button]:px-2 [&_button]:py-0.5 [&_button]:text-sm [&_button]:font-medium [&_button]:text-text [&_button.active]:bg-background [&_button.active]:shadow-segment"
+                      role="group"
+                      aria-label={m.app_hypothesis_canvas()}
+                    >
+                      <button
+                        type="button"
+                        className={researchCanvas === "experiments" ? "active" : ""}
+                        aria-pressed={researchCanvas === "experiments"}
+                        onClick={() => setResearchCanvas("experiments")}
+                      >
+                        {m.app_experiments()}
+                      </button>
+                      <button
+                        type="button"
+                        className={researchCanvas === "hypotheses" ? "active" : ""}
+                        aria-pressed={researchCanvas === "hypotheses"}
+                        onClick={() => setResearchCanvas("hypotheses")}
+                      >
+                        {m.app_hypotheses()}
+                      </button>
+                    </div>
                     <div className="option-picker relative inline-flex" ref={scopeMenuRef}>
                       <IconButton size="small"
                         ref={scopeTriggerRef}
@@ -1818,7 +1881,34 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
                   </div>
                 </div>
                 <div className="pane-content flex-1 min-h-0 relative bg-background">
-                  {view === "tree" ? (
+                  {researchCanvas === "hypotheses" ? (
+                    <>
+                      {view === "tree" ? (
+                        <HypothesisTree
+                          hypotheses={scopedHypotheses}
+                          runs={runs}
+                          onSelect={setSelectedHypothesisId}
+                          onOpenExperiment={(experimentId) => openExperimentTab(experimentId, "overview", "keepOpen")}
+                          viewport={hypothesisViewport}
+                          onViewportChange={setHypothesisViewport}
+                        />
+                      ) : (
+                        <HypothesisTable
+                          hypotheses={scopedHypotheses}
+                          onOpen={(hypothesis) => setSelectedHypothesisId(hypothesis.id)}
+                        />
+                      )}
+                      {selectedHypothesis && (
+                        <HypothesisOverview
+                          hypothesis={selectedHypothesis}
+                          parent={selectedHypothesisParent}
+                          onOpenExperiment={(experimentId) => openExperimentTab(experimentId, "overview", "keepOpen")}
+                          onOpenHypothesis={setSelectedHypothesisId}
+                          onClose={() => setSelectedHypothesisId(null)}
+                        />
+                      )}
+                    </>
+                  ) : view === "tree" ? (
                     activeProject && (
                       <TreeView
                         experiments={experiments}

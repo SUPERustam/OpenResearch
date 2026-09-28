@@ -49,6 +49,10 @@ A matched folder is flattened; nested paths are relative to that folder. Always 
 
 i18n keys (do not rename lightly): `tree_view_artifacts`, `tree_view_open_artifacts`, `tree_view_no_matching_artifacts`, `experiment_overview_artifacts`, `experiment_overview_open_artifacts`, `experiments_table_artifacts`, `experiments_table_open_artifacts`.
 
+## Hypothesis canvas
+
+Experiments | Hypotheses is a second canvas in the experiments pane (`HypothesisTree`, `HypothesisTable`, `HypothesisOverview`). A hypothesis has no Logs, Code, or Artifacts control. The Parent title opens that parent with the same plain button style as the experiment rows in the overview. Internet sources are the underlined external links. A root shows Parent as plain text.
+
 ## UI kit
 
 Use `components/ui/` (`Button`, `IconButton`, `MenuItem`, `cn`). Prefer `tabOpenGestureHandlers` from `tabPreview.ts` for anything that opens a tab.

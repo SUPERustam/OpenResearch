@@ -99,6 +99,10 @@ intended flow — do **not** edit a frozen node or rewrite the run command:
    decision (which LR? which schedule? which init?), each a concrete change you can
    make and measure against the others in this round. Don't mix decisions from
    different rounds into one batch — that's what produces the flat fan.
+   Record each claim on the hypothesis tree (`orx-hypothesis-tree`): internet
+   sources and originating experiments when they exist, and a link from the
+   claim to each experiment node that tests it. The experiment node stays the
+   code and the measurement.
 3. **Create the round as a bush, and pick its parent deliberately.** All of this
    round's options are **siblings under one parent** — the title is the idea, the
    description is the concrete change you'll make on that node's branch. The parent is:

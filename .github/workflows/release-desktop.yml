@@ -1,0 +1,111 @@
+# Builds the macOS and Windows archives the CoHyp installer downloads, and
+# attaches them to an existing GitHub Release.
+#
+# cargo-dist's Release workflow already plans these targets, but v0.2.7 was
+# published before that workflow ran, so the release only has the Linux
+# archive. Run this workflow (Actions → Desktop release builds) with the
+# release tag to add:
+#   openresearch-cli-aarch64-apple-darwin.tar.xz
+#   openresearch-cli-x86_64-apple-darwin.tar.xz
+#   openresearch-cli-x86_64-pc-windows-msvc.zip
+#
+# The signed OpenResearch.dmg is still release-macos-app.yml and stays off
+# until Apple signing is configured.
+
+name: Desktop release builds
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to attach the macOS and Windows archives to
+        required: true
+        default: v0.2.7
+        type: string
+  # Editing this file on main builds the latest release's missing archives.
+  # workflow_dispatch is the way to target a specific tag later.
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/release-desktop.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-desktop-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: ${{ matrix.asset }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            asset: openresearch-cli-aarch64-apple-darwin.tar.xz
+          - runner: macos-14
+            target: x86_64-apple-darwin
+            asset: openresearch-cli-x86_64-apple-darwin.tar.xz
+          - runner: windows-2022
+            target: x86_64-pc-windows-msvc
+            asset: openresearch-cli-x86_64-pc-windows-msvc.zip
+    steps:
+      - name: Resolve the release tag
+        id: tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_TAG}" ]; then
+            tag="${INPUT_TAG}"
+          else
+            tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)"
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Enable Windows long paths
+        if: runner.os == 'Windows'
+        run: git config --global core.longpaths true
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cargo-dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.sh | sh
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Build the release archive
+        shell: bash
+        env:
+          ORX_OFFICIAL_RELEASE_BUILD: "1"
+        run: dist build --artifacts=local --target=${{ matrix.target }}
+
+      - name: Upload the archive to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          archive="target/distrib/${{ matrix.asset }}"
+          test -f "$archive"
+          gh release upload "$TAG" "$archive" --clobber
