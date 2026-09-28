@@ -19,6 +19,7 @@ use crate::client::{
     BiorxivDetail, OpenAlexWork,
 };
 use crate::error::{anyhow, Result};
+use crate::lit_connectors::{read_asta, read_keenable, read_lacuna, scispace_unavailable};
 use crate::LitSource;
 
 pub async fn run(args: crate::PaperArgs) -> Result<()> {
@@ -28,6 +29,19 @@ pub async fn run(args: crate::PaperArgs) -> Result<()> {
         LitSource::Alphaxiv => run_alphaxiv(&args).await,
         LitSource::Openalex => run_openalex(&args.id, args.full).await,
         LitSource::Biorxiv => run_biorxiv(&args.id, args.full).await,
+        LitSource::Lacuna => {
+            println!("{}", read_lacuna(&args.id).await?);
+            Ok(())
+        }
+        LitSource::Keenable => {
+            println!("{}", read_keenable(&args.id).await?);
+            Ok(())
+        }
+        LitSource::Asta => {
+            println!("{}", read_asta(&args.id, args.full).await?);
+            Ok(())
+        }
+        LitSource::Scispace => Err(scispace_unavailable()),
     }
 }
 
@@ -216,6 +230,15 @@ fn detect_source(input: &str) -> LitSource {
     if lower.contains("openalex.org") {
         return LitSource::Openalex;
     }
+    if lower.contains("lacuna.tiptreesystems.com") {
+        return LitSource::Lacuna;
+    }
+    if lower.contains("semanticscholar.org")
+        || lower.contains("asta.allen.ai")
+        || lower.starts_with("s2:")
+    {
+        return LitSource::Asta;
+    }
     if let Some(doi) = extract_doi(input) {
         return if doi.starts_with("10.1101/") {
             LitSource::Biorxiv
@@ -356,6 +379,12 @@ mod tests {
             ("https://doi.org/10.1038/nature14539", LitSource::Openalex),
             ("W2919115771", LitSource::Openalex),
             ("https://openalex.org/W2919115771", LitSource::Openalex),
+            (
+                "https://lacuna.tiptreesystems.com/work/attention/wrk_abc",
+                LitSource::Lacuna,
+            ),
+            ("s2:abc123", LitSource::Asta),
+            ("https://www.semanticscholar.org/paper/abc", LitSource::Asta),
         ];
         for (input, want) in cases {
             assert_eq!(detect_source(input), want, "input: {input}");

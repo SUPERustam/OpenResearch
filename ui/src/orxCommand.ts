@@ -1,11 +1,18 @@
-export type LitSource = "alphaxiv" | "openalex" | "biorxiv";
+export type LitSource =
+  | "alphaxiv"
+  | "openalex"
+  | "biorxiv"
+  | "lacuna"
+  | "keenable"
+  | "asta"
+  | "scispace";
 
 export type OrxLitCall =
   | { kind: "paper"; source: LitSource; id?: string }
   | {
       kind: "discover";
       source: LitSource;
-      strategy: "keyword" | "embedding" | "openalex" | "biorxiv";
+      strategy: "keyword" | "embedding" | "openalex" | "biorxiv" | "lacuna" | "keenable" | "asta" | "scispace";
       query?: string;
     };
 
@@ -13,10 +20,10 @@ export function containsShellGlob(value: string): boolean {
   return ["*", "?", "[", "]", "{", "}"].some((token) => value.includes(token));
 }
 
+const LIT_SOURCES = ["alphaxiv", "openalex", "biorxiv", "lacuna", "keenable", "asta", "scispace"] as const;
+
 function asSource(value: string | undefined): LitSource | undefined {
-  return value === "alphaxiv" || value === "openalex" || value === "biorxiv"
-    ? value
-    : undefined;
+  return LIT_SOURCES.find((source) => source === value);
 }
 
 function detectPaperSource(id: string): LitSource {
@@ -24,6 +31,10 @@ function detectPaperSource(id: string): LitSource {
   const lower = value.toLowerCase();
   if (lower.includes("biorxiv.org")) return "biorxiv";
   if (lower.includes("openalex.org")) return "openalex";
+  if (lower.includes("lacuna.tiptreesystems.com")) return "lacuna";
+  if (lower.includes("semanticscholar.org") || lower.includes("asta.allen.ai") || lower.startsWith("s2:")) {
+    return "asta";
+  }
   const doi = value.match(/10\.\d+\/\S+/);
   if (doi) return doi[0].startsWith("10.1101/") ? "biorxiv" : "openalex";
   const last = value.split("/").pop() ?? "";
@@ -153,6 +164,7 @@ export function parseOrxLit(command: string | readonly string[]): OrxLitCall | n
     "--published-after",
     "--published-before",
     "--prioritize",
+    "--kind",
   ]);
   for (let index = 1; index < argv.length; index++) {
     const token = argv[index];
@@ -186,10 +198,12 @@ export function parseOrxLit(command: string | readonly string[]): OrxLitCall | n
     strategy !== "keyword" &&
     strategy !== "embedding" &&
     strategy !== "openalex" &&
-    strategy !== "biorxiv"
+    strategy !== "biorxiv" &&
+    strategy !== "lacuna" &&
+    strategy !== "keenable" &&
+    strategy !== "asta" &&
+    strategy !== "scispace"
   ) return null;
-  const discoverSource = strategy === "openalex" || strategy === "biorxiv"
-    ? strategy
-    : "alphaxiv";
-  return { kind, source: discoverSource, strategy, query: positionals[1] };
+  const discoverSource = strategy === "keyword" || strategy === "embedding" ? "alphaxiv" : strategy;
+  return { kind, source: source ?? discoverSource, strategy, query: positionals[1] };
 }

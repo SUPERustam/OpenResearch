@@ -5,6 +5,9 @@ use crate::client::{
     OpenAlexDiscoveryOptions, PaperDiscoveryOptions, BIORXIV_SOURCE_ID,
 };
 use crate::error::{anyhow, Result};
+use crate::lit_connectors::{
+    discover_asta, discover_keenable, discover_lacuna, scispace_unavailable, ConnectorQuery,
+};
 use crate::LitSource;
 
 pub async fn run(args: crate::DiscoverArgs) -> Result<()> {
@@ -40,6 +43,23 @@ pub async fn run(args: crate::DiscoverArgs) -> Result<()> {
             )
             .await?
         }
+        crate::DiscoverCommand::Lacuna(args) => {
+            ensure_source_enabled(LitSource::Lacuna, &disabled)?;
+            discover_lacuna(connector_query(&args)).await?
+        }
+        crate::DiscoverCommand::Keenable(args) => {
+            ensure_source_enabled(LitSource::Keenable, &disabled)?;
+            discover_keenable(connector_query(&args)).await?
+        }
+        crate::DiscoverCommand::Asta(args) => {
+            ensure_source_enabled(LitSource::Asta, &disabled)?;
+            discover_asta(connector_query(&args)).await?
+        }
+        crate::DiscoverCommand::Scispace(args) => {
+            ensure_source_enabled(LitSource::Scispace, &disabled)?;
+            let _ = args;
+            return Err(scispace_unavailable());
+        }
     };
 
     println!("{}", serde_json::to_string_pretty(&results)?);
@@ -51,6 +71,17 @@ fn alphaxiv_options(args: &crate::DiscoverySearchArgs) -> PaperDiscoveryOptions<
         published_after: args.published_after.as_deref(),
         published_before: args.published_before.as_deref(),
         prioritize: args.prioritize.as_str(),
+    }
+}
+
+fn connector_query(args: &crate::DiscoverySearchArgs) -> ConnectorQuery<'_> {
+    ConnectorQuery {
+        query: &args.query,
+        limit: args.limit,
+        published_after: args.published_after.as_deref(),
+        published_before: args.published_before.as_deref(),
+        prioritize: args.prioritize.as_str(),
+        kind: &args.kind,
     }
 }
 

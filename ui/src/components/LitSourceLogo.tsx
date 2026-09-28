@@ -15,12 +15,24 @@ export const LIT_SOURCE_NAME: Record<LitSource, string> = {
   alphaxiv: "alphaXiv",
   openalex: "OpenAlex",
   biorxiv: "bioRxiv",
+  lacuna: "Lacuna",
+  keenable: "Keenable",
+  asta: "Asta",
+  scispace: "SciSpace",
 };
+
+function monogram(letter: string): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><text x="8" y="12" text-anchor="middle" font-size="11" font-family="ui-sans-serif,sans-serif" font-weight="700" fill="#111">${letter}</text></svg>`;
+}
 
 const LIT_SOURCE_SVG: Record<LitSource, string> = {
   alphaxiv: alphaxivSvg,
   openalex: openalexSvg,
   biorxiv: biorxivSvg,
+  lacuna: monogram("L"),
+  keenable: monogram("K"),
+  asta: monogram("A"),
+  scispace: monogram("S"),
 };
 
 /** `decorative` when the source name is already shown as adjacent text (Settings
@@ -62,6 +74,8 @@ function doiFrom(id: string): string | null {
  * OpenAlex work page for OpenAlex. */
 export function paperUrl(source: LitSource, id: string): string {
   const s = id.trim();
+  if (source === "keenable") return s;
+  if (source === "lacuna" && /^https?:\/\//i.test(s)) return s;
   if (source === "alphaxiv") {
     const last = s.split(/[?#]/)[0].split("/").pop() || s;
     const arxivId = last.replace(/\.(pdf|md)$/i, "");
@@ -73,5 +87,11 @@ export function paperUrl(source: LitSource, id: string): string {
     const wid = s.split("/").pop() || s;
     return `https://openalex.org/${encodeURIComponent(wid)}`;
   }
+  if (source === "asta") {
+    const id = s.replace(/^s2:/i, "");
+    return `https://www.semanticscholar.org/paper/${encodeURIComponent(id)}`;
+  }
+  if (source === "scispace") return "https://scispace.com/";
+  if (source === "lacuna") return "https://lacuna.tiptreesystems.com/";
   return `https://doi.org/${s}`;
 }

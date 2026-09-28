@@ -53,6 +53,33 @@ pub fn openalex_mailto() -> String {
     std::env::var("OPENALEX_MAILTO").unwrap_or_else(|_| "orx@alphaxiv.org".to_string())
 }
 
+/// Lacuna public API. Override with `LACUNA_API_URL`.
+pub fn lacuna_api_url() -> String {
+    std::env::var("LACUNA_API_URL")
+        .unwrap_or_else(|_| "https://lacuna.tiptreesystems.com".to_string())
+}
+
+/// Keenable web search API. Override with `KEENABLE_API_URL`.
+pub fn keenable_api_url() -> String {
+    std::env::var("KEENABLE_API_URL").unwrap_or_else(|_| "https://api.keenable.ai".to_string())
+}
+
+/// Ai2 Asta MCP endpoint. Override with `ASTA_MCP_URL`.
+pub fn asta_mcp_url() -> String {
+    std::env::var("ASTA_MCP_URL")
+        .unwrap_or_else(|_| "https://asta-tools.allen.ai/mcp/v1".to_string())
+}
+
+/// Literature API key from the process environment or `~/.openresearch/env`.
+/// The process value wins so a one-shot override still works.
+pub fn lit_api_key(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .or_else(|| synced_env_var(name))
+}
+
 /// Stored credentials: the API base URL and the bearer token.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Credentials {
