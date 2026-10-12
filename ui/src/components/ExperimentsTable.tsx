@@ -19,28 +19,33 @@ import { StatusBadge } from "./StatusBadge";
 import { ExperimentArtifactsMenu } from "./ExperimentArtifactsMenu";
 import { tabOpenGestureHandlers, type TabOpenIntent } from "../tabPreview";
 import { Button } from "./ui";
+import { ArchiveMenu, type ArchiveActions } from "./ArchiveMenu";
 
 const EMPTY_ARTIFACT_ENTRIES: ArtifactEntry[] = [];
 
 export function ExperimentsTable({
   runs,
   experiments,
+  archiveActions,
   emptyHint,
   projectId,
   onOpen,
   onOpenLogs,
   onOpenCode,
   onOpenArtifact,
+  onArchive,
   onCancel,
 }: {
   runs: Run[];
   experiments: Experiment[];
+  archiveActions: Map<string, ArchiveActions>;
   emptyHint?: string;
   projectId: string;
   onOpen: (experiment: Experiment, intent: TabOpenIntent) => void;
   onOpenLogs: (experimentId: string, runId: string, intent: TabOpenIntent) => void;
   onOpenCode: (experimentId: string, intent: TabOpenIntent) => void;
   onOpenArtifact: (path: string, intent: TabOpenIntent) => void;
+  onArchive: (id: string, direction: "ancestors" | "descendants" | "only", archived: boolean) => void;
   onCancel: (runId: string) => Promise<void>;
 }) {
   const artifactsQuery = useQuery(getArtifactsQuery(projectId));
@@ -126,10 +131,12 @@ export function ExperimentsTable({
               status={status}
               entries={entries}
               artifactsPending={artifactsQuery.isPending}
+              archiveActions={archiveActions.get(experiment.id)!}
               onOpen={onOpen}
               onOpenLogs={onOpenLogs}
               onOpenCode={onOpenCode}
               onOpenArtifact={onOpenArtifact}
+              onArchive={onArchive}
               onCancelRun={requestCancel}
             />
           );
@@ -153,6 +160,8 @@ function ExperimentTableRow({
   onOpenLogs,
   onOpenCode,
   onOpenArtifact,
+  onArchive,
+  archiveActions,
   onCancelRun,
 }: {
   experiment: Experiment;
@@ -168,6 +177,8 @@ function ExperimentTableRow({
   onOpenLogs: (experimentId: string, runId: string, intent: TabOpenIntent) => void;
   onOpenCode: (experimentId: string, intent: TabOpenIntent) => void;
   onOpenArtifact: (path: string, intent: TabOpenIntent) => void;
+  onArchive: (id: string, direction: "ancestors" | "descendants" | "only", archived: boolean) => void;
+  archiveActions: ArchiveActions;
   onCancelRun: (runId: string) => void;
 }) {
   const files = useMemo(
@@ -207,6 +218,7 @@ function ExperimentTableRow({
         >
           {experiment.title || experiment.slug}
         </button>
+        {experiment.archived && <span className="text-muted text-xs">{m.tree_archived()}</span>}
         <span className="experiment-table-subtitle flex items-center min-w-0 gap-1.5 mt-1 overflow-hidden text-subtext text-sm [&_>_svg]:shrink-0 [&_code]:min-w-0 [&_code]:overflow-hidden [&_code]:text-ellipsis [&_code]:whitespace-nowrap" title={experiment.branchName}>
           <GitBranch size={14} aria-hidden="true" />
           <code>{experiment.branchName}</code>
@@ -278,6 +290,12 @@ function ExperimentTableRow({
             {cancelling ? m.common_stopping() : m.common_stop()}
           </Button>
         )}
+        <ArchiveMenu
+          id={experiment.id}
+          name={experiment.title || experiment.slug}
+          actions={archiveActions}
+          onArchive={onArchive}
+        />
         {artifactsOpen && (
           <ExperimentArtifactsMenu
             triggerRef={artifactsBtnRef}

@@ -18,6 +18,7 @@ import {
   captureUiEvent,
   type HarnessSetupCommands,
   completeOnboarding,
+  installGit,
   reasoningFor,
   type AgentSelection,
   type Harness,
@@ -28,9 +29,11 @@ import {
   type Project,
 } from "../api";
 import { renderNote } from "./agentNote";
+import { claudeProviderLabel } from "./claudeProvider";
 import { HarnessLogo } from "./HarnessLogo";
 import { HarnessSetupDialog } from "./HarnessSetupDialog";
 
+import { Hyperspace } from "./Hyperspace";
 import { Button, LoadingRow, Spinner, StatusIndicator, type StatusTone } from "./ui";
 import { PaperTitle } from "./PaperTitle";
 
@@ -41,7 +44,7 @@ const ONB_GATE_HINT_CLASS_NAME = [
 
 const ONB_CARD_META_CLASS_NAME = [
   "onb-card-meta text-sm text-subtext [&_code]:font-mono",
-  "[&_code]:text-xs [&_code]:bg-panel",
+  "[&_code]:text-xs [&_code]:bg-surface",
   "[&_code]:border [&_code]:border-border-variant [&_code]:rounded-xs",
   "[&_code]:py-px [&_code]:px-[5px] [&_code]:whitespace-nowrap",
 ].join(" ");
@@ -106,6 +109,7 @@ export function Onboarding({
   useEffect(() => () => installSocket.current?.close(), []);
   const harnesses = harnessQuery.data ?? null;
   const gitVersion = pathQuery.data?.gitVersion;
+  const gitInstallable = !remote && pathQuery.data?.gitInstallable === true;
   const [finishing, setFinishing] = useState(false);
   const [finishError, setFinishError] = useState<string | null>(null);
   const [finishErrorDetails, setFinishErrorDetails] = useState("");
@@ -126,8 +130,10 @@ export function Onboarding({
   const [gitError, setGitError] = useState(false);
 
   // Step 1 requires one genuinely usable harness and local Git. Failed or
-  // inconclusive detection never bypasses either gate.
-  const anyAgentReady = harnesses?.some((h) => h.agentReady) ?? false;
+  // inconclusive detection never bypasses either gate — and a harness whose
+  // snapshot is still being filled in is inconclusive, not ready.
+  const anyAgentReady = harnesses?.some((h) => h.agentReady && !h.catalogPending) ?? false;
+  const anyPending = harnesses?.some((h) => h.catalogPending) ?? false;
   const gitReady = gitVersion != null;
 
   // Drops a slow probe whose answer a newer load has already superseded.
@@ -154,9 +160,18 @@ export function Onboarding({
       .finally(() => fresh() && setChecking(false));
   };
   useEffect(() => load(false), []);
+  const installGitMutation = useMutation({ mutationFn: installGit, onSuccess: () => load(true) });
+  const gitInstallPrompt = (
+    <GitInstallPrompt
+      pending={installGitMutation.isPending}
+      error={installGitMutation.error}
+      disabled={checking}
+      onInstall={() => installGitMutation.mutate()}
+    />
+  );
   useEffect(() => {
     if (harnesses === null) return;
-    const ready = harnesses.filter((h) => h.agentReady);
+    const ready = harnesses.filter((h) => h.agentReady && !h.catalogPending);
     setPreferredHarness((current) => {
       if (current && ready.some((h) => h.id === current)) return current;
       const saved = preferredAgent && ready.find((h) => h.id === preferredAgent.harness);
@@ -284,7 +299,9 @@ export function Onboarding({
   };
 
   useEffect(() => {
-    if (remote || automaticSetupStarted.current || !harnesses?.length || !harnesses.every((h) => !h.installed && !h.installBroken)) return;
+    // Wait out a pending snapshot: an install detection still in flight must
+    // not read as "nothing installed" and trigger an unattended setup.
+    if (remote || automaticSetupStarted.current || !harnesses?.length || harnesses.some((h) => h.catalogPending) || !harnesses.every((h) => !h.installed && !h.installBroken)) return;
     void startAutomaticSetup();
   }, [harnesses, remote]);
 
@@ -304,7 +321,7 @@ export function Onboarding({
     try {
       const harness = automaticSetup
         ? await startAutomaticSetup()
-        : harnesses?.find((item) => item.id === preferredHarness && item.agentReady);
+        : harnesses?.find((item) => item.id === preferredHarness && item.agentReady && !item.catalogPending);
       if (!harness) throw new Error(m.harness_setup_not_ready());
       if (mode === "setup") return;
       const selection = selectionFor(harness, harness.models[0]?.id ?? null);
@@ -327,7 +344,7 @@ export function Onboarding({
 
   return (
     <div
-      className={`home flex-1 min-h-0 overflow-y-auto [scrollbar-gutter:stable_both-edges] bg-canvas onboarding ${
+      className={`home flex-1 min-h-0 overflow-y-auto [scrollbar-gutter:stable_both-edges] bg-background onboarding ${
         step === 0
           ? "[&_.home-inner]:max-w-300 [&_.home-inner]:pt-0 [&_.home-inner]:pb-0"
           : "[&_.home-inner]:max-w-140 [&_.home-inner]:pt-24"
@@ -351,54 +368,15 @@ export function Onboarding({
           }`}
       >
         {step === 0 ? (
-          <div className="onb-intro relative flex min-h-dvh flex-col justify-center gap-4 py-12 min-[1120px]:grid min-[1120px]:grid-cols-[minmax(0,_1.1fr)_minmax(28rem,_1fr)] min-[1120px]:grid-rows-[auto_auto] min-[1120px]:content-center min-[1120px]:gap-x-20 min-[1120px]:gap-y-10">
-            <div className="onb-intro-copy relative z-10 min-[1120px]:col-start-1 min-[1120px]:row-start-1 min-[1120px]:self-start">
-              <div className="onb-intro-brand mb-10 text-6xl font-semibold leading-none tracking-[-0.035em]">
-                <Wordmark />
-              </div>
-              <h2 className="onb-title mt-0 mx-0 text-4xl font-medium leading-[1.08] tracking-[-0.035em]">
-                {m.onboarding_a_workspace_for_your_research_agents()}
-              </h2>
+          <div className="onb-intro flex min-h-dvh flex-col items-center justify-center gap-6 text-center">
+            <Hyperspace className="pointer-events-none fixed inset-0 size-full" />
+            <div className="onb-intro-brand relative text-6xl font-semibold leading-none tracking-[-0.035em] animate-[onb-warp-in_700ms_cubic-bezier(0.16,1,0.3,1)_1250ms_both] motion-reduce:animate-none">
+              <Wordmark />
             </div>
-            <div className="onb-intro-features relative min-[1120px]:col-start-2 min-[1120px]:row-start-1 min-[1120px]:self-end">
-              <div
-                aria-hidden="true"
-                className="absolute -inset-14 rounded-full bg-primary-subtle opacity-70 blur-3xl"
-              />
-              <ul className="onb-intro-list relative flex flex-col gap-4 m-0 p-0 list-none">
-                <li className="rounded-2xl border border-border bg-background p-6 shadow-card">
-                  <span>
-                    <strong className="mb-1.5 block text-xl font-semibold tracking-[-0.015em]">
-                      {m.onboarding_consolidate_your_research()}
-                    </strong>
-                    <span className="block text-lg leading-[1.55] text-text">
-                      {m.onboarding_track_experiments_artifacts_compute_skills_and_code_all()}
-                    </span>
-                  </span>
-                </li>
-                <li className="rounded-2xl border border-border bg-background p-6 shadow-card">
-                  <span>
-                    <strong className="mb-1.5 block text-xl font-semibold tracking-[-0.015em]">
-                      {m.onboarding_ground_your_agents()}
-                    </strong>
-                    <span className="block text-lg leading-[1.55] text-text">
-                      {m.onboarding_sources_description()}
-                    </span>
-                  </span>
-                </li>
-                <li className="rounded-2xl border border-border bg-background p-6 shadow-card">
-                  <span>
-                    <strong className="mb-1.5 block text-xl font-semibold tracking-[-0.015em]">
-                      {m.onboarding_everything_stays_local()}
-                    </strong>
-                    <span className="block text-lg leading-[1.55] text-text">
-                      {m.onboarding_your_code_data_and_experiment_history_stay_on()}
-                    </span>
-                  </span>
-                </li>
-              </ul>
-            </div>
-            <div className="onb-intro-actions relative z-10 mt-8 flex justify-end min-[1120px]:col-start-2 min-[1120px]:row-start-2 min-[1120px]:mt-0 min-[1120px]:self-start">
+            <h2 className="onb-title relative m-0 text-2xl font-medium text-muted tracking-[-0.02em] animate-[onb-welcome-in_700ms_ease-out_1700ms_both] motion-reduce:animate-none">
+              {m.onboarding_the_local_first_workspace_for_research_agents()}
+            </h2>
+            <div className="relative mt-6 animate-[onb-welcome-in_600ms_ease-out_2300ms_both] motion-reduce:animate-none">
               <Button variant="primary" size="large"
                 onClick={continueFromWelcome}
                 disabled={checking && harnesses === null}
@@ -415,7 +393,7 @@ export function Onboarding({
             </div>
             <h2 className="onb-title mt-0 mx-0 mb-1.5 text-3xl tracking-[-0.01em]">{m.onboarding_choose_a_coding_agent()}</h2>
             <p className="onb-sub text-text text-base leading-[1.55] mt-0 mx-0 mb-5.5 max-w-120">{m.onboarding_open_research_uses_a_coding_agent_already_installed()}</p>
-            {harnesses !== null && !anyAgentReady && (
+            {harnesses !== null && !anyAgentReady && !anyPending && (
               <p className={ONB_GATE_HINT_CLASS_NAME}>
                 {m.onboarding_sign_in_to_at_least_one_agent_to()}
               </p>
@@ -426,10 +404,12 @@ export function Onboarding({
               </p>
             )}
             {(gitVersion === null || gitError) && (
-              <div className="onb-git-check mt-7" role="status" aria-live="polite">
+              <div className="onb-git-check mt-7 mb-5.5" role="status" aria-live="polite">
                 <LocalGitCard gitVersion={gitVersion} error={gitError} />
                 {gitError ? (
                   <p className={GIT_RETRY_HINT_CLASS_NAME}>{m.onboarding_retry_connection()}</p>
+                ) : gitInstallable ? (
+                  gitInstallPrompt
                 ) : (
                   <p className={GIT_RETRY_HINT_CLASS_NAME}>
                     {m.onboarding_git_is_required_for_local_experiments_install_git()}
@@ -474,7 +454,7 @@ export function Onboarding({
                 onClick={() => setStep(2)}
                 disabled={checking || !anyAgentReady || preferredHarness === null || !gitReady}
                 title={
-                  checking
+                  checking || (!anyAgentReady && anyPending)
                     ? m.onboarding_waiting_tool_checks()
                     : !anyAgentReady
                       ? m.onboarding_sign_in_agent_to_continue()
@@ -603,8 +583,14 @@ export function Onboarding({
             {automaticSetup && !gitReady && (
               <div className="mt-5" role="status">
                 <LocalGitCard gitVersion={gitVersion} error={gitError} />
-                <p className={GIT_RETRY_HINT_CLASS_NAME}>{gitError ? m.onboarding_retry_connection() : m.onboarding_git_is_required_for_local_experiments_install_git()}</p>
-                <Button onClick={() => load(true, true)} disabled={checking}>{m.onboarding_re_check()}</Button>
+                {gitError ? (
+                  <p className={GIT_RETRY_HINT_CLASS_NAME}>{m.onboarding_retry_connection()}</p>
+                ) : gitInstallable ? (
+                  gitInstallPrompt
+                ) : (
+                  <p className={GIT_RETRY_HINT_CLASS_NAME}>{m.onboarding_git_is_required_for_local_experiments_install_git()}</p>
+                )}
+                <Button className="mt-2.5" onClick={() => load(true, true)} disabled={checking}>{m.onboarding_re_check()}</Button>
               </div>
             )}
             <div className="onb-actions flex items-center gap-2.5 mt-5.5">
@@ -670,13 +656,18 @@ function cleanPaperTitle(title: string): string {
 /** Agent notes carry the command to run in backticks (`claude auth login`) —
  * render those spans as code so they read as something to type, not prose. */
 function agentBadge(h: Harness): { tone: StatusTone; label: string } {
-  if (h.agentReady) return { tone: "success", label: h.authMethod === "local" || !h.authenticated ? m.onboarding_ready() : m.onboarding_signed_in() };
+  // A snapshot answer still being filled in — "checking" rather than a badge
+  // the background pass may revoke.
+  if (h.catalogPending) return { tone: "warning", label: m.onboarding_checking() };
+  if (h.authCheckFailed) return { tone: "warning", label: m.onboarding_unable_to_verify() };
+  if (h.agentReady) return { tone: "success", label: h.authMethod === "thirdParty" || claudeProviderLabel(h) ? m.settings_page_ready_to_use() : h.authMethod === "local" || !h.authenticated ? m.onboarding_ready() : m.onboarding_signed_in() };
   if (!h.installed) return { tone: "neutral", label: m.onboarding_not_detected() };
   if (h.installBroken) return { tone: "warning", label: m.onboarding_install_broken() };
   if (h.authMethod === "local") return { tone: "warning", label: m.onboarding_server_unavailable() };
   // A config fault reports `unsupported`, but no update repairs it; the note
   // carries the actual repair, so the badge must not promise an update.
   if (h.needsConfigRepair || h.authState === "unknown") return { tone: "warning", label: m.onboarding_unable_to_verify() };
+  if (h.id === "claude-code" && h.authState === "needsLogin" && !h.loginEligible) return { tone: "warning", label: m.onboarding_unable_to_verify() };
   if (h.authState === "unsupported") return { tone: "warning", label: m.onboarding_update_required() };
   if (h.installed) return { tone: "warning", label: m.onboarding_not_signed_in() };
   return { tone: "neutral", label: m.onboarding_not_detected() };
@@ -714,11 +705,12 @@ function AgentCard({
   // (an environment credential overriding the saved login, a database the CLI
   // will not open). Offering one sends the user through a command that
   // provably cannot help; the agentNote below carries the actual repair.
-  const canSetup = !remote && !h.needsConfigRepair && (!h.installed || h.installBroken || h.authState === "unsupported" || (h.authMethod !== "local" && h.authMethod !== "apiKey" && (h.authState === "needsLogin" || h.authState === "unknown")));
+  const canLogin = h.id === "claude-code" ? Boolean(h.loginEligible) : h.authMethod !== "local" && h.authMethod !== "apiKey" && (h.authState === "needsLogin" || h.authState === "unknown");
+  const canSetup = !remote && !h.needsConfigRepair && !h.catalogPending && (!h.installed || h.installBroken || h.authState === "unsupported" || canLogin);
   const showSetupAction = !h.agentReady && canSetup;
   const showStatusDot = canSetup && (!h.installed || (!h.agentReady && h.authState === "needsLogin"));
   const badge = agentBadge(h);
-  const visibleBadge: { tone: StatusTone; label: string } = selected
+  const visibleBadge: { tone: StatusTone; label: string } = selected && !h.authCheckFailed
     ? { tone: "success", label: m.onboarding_selected() }
     : badge;
   const version = h.version?.replace(/\s*\(.*\)$/, "");
@@ -778,13 +770,37 @@ function AgentCard({
       {h.id !== "opencode" && (
         <div className="onb-card-detail flex items-center gap-1.5 text-sm">
           {h.accountLoading ? <><Spinner /> {m.onboarding_loading_account()}</> : <>
-            {h.account ?? (h.authMethod === "apiKey" ? m.onboarding_api_key() : null)}
+            {claudeProviderLabel(h) ?? h.account ?? (h.authMethod === "apiKey" ? m.onboarding_api_key() : null)}
             {h.plan ? ` · ${h.plan}` : ""}
           </>}
         </div>
       )}
       {meta && <div className={ONB_CARD_META_CLASS_NAME}>{meta}</div>}
+      {h.authCheckFailed && h.agentNote && <div className={ONB_CARD_META_CLASS_NAME}>{renderNote(h.agentNote)}</div>}
     </button>
+  );
+}
+
+function GitInstallPrompt({
+  pending,
+  error,
+  disabled,
+  onInstall,
+}: {
+  pending: boolean;
+  error: Error | null;
+  disabled: boolean;
+  onInstall: () => void;
+}) {
+  return (
+    <div className="flex flex-col items-start gap-2.5">
+      <p className={GIT_RETRY_HINT_CLASS_NAME}>{m.onboarding_install_git_for_windows()}</p>
+      <Button variant="primary" onClick={onInstall} disabled={pending || disabled}>
+        {pending && <Spinner />}
+        {pending ? m.onboarding_installing_git() : m.onboarding_install_git()}
+      </Button>
+      {error && <p className="text-accent-red text-sm m-0">{error.message}</p>}
+    </div>
   );
 }
 

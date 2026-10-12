@@ -104,13 +104,22 @@ pub(super) async fn run_turn(
         ctx.persist_delivery(DeliveryState::Accepted)?;
     }
     let mut surfaced = HashSet::new();
+    let mut recorded = HashSet::new();
     let mut was_idle = false;
     loop {
         // ponytail: full projected history polling; switch to paged durable log if long chats make this costly.
         let projection = get(&endpoint, &endpoint.v2_export_path(&native_id)).await?;
         let current = messages(&projection)?;
         let delivered = current.iter().any(|m| m["id"].as_str() == Some(&prompt_id));
-        merge_projection(ctx, &endpoint, &native_id, current, &previous).await?;
+        merge_projection(
+            ctx,
+            &endpoint,
+            &native_id,
+            current,
+            &previous,
+            &mut recorded,
+        )
+        .await?;
         if delivered && ctx.delivery_state() != DeliveryState::Accepted {
             ctx.persist_delivery(DeliveryState::Accepted)?;
         }
@@ -133,18 +142,30 @@ pub(super) async fn run_turn(
                 || final_messages
                     .iter()
                     .any(|m| m["id"].as_str() == Some(&prompt_id));
-            let answered =
-                merge_projection(ctx, &endpoint, &native_id, final_messages, &previous).await?;
-            if delivered
-                && answered
-                && final_projection
-                    .pointer("/data/info/outcome")
-                    .and_then(Value::as_str)
-                    == Some("succeeded")
-            {
+            let answered = merge_projection(
+                ctx,
+                &endpoint,
+                &native_id,
+                final_messages,
+                &previous,
+                &mut recorded,
+            )
+            .await?;
+            let outcome = final_projection
+                .pointer("/data/info/outcome")
+                .and_then(Value::as_str);
+            if delivered && answered && outcome == Some("succeeded") {
                 ctx.persist_delivery(DeliveryState::Accepted)?;
                 ctx.mark_final_text_tail();
                 return Ok(());
+            }
+            if delivered && outcome == Some("failed") {
+                // Failures before a step (e.g. an unavailable model) leave no assistant message.
+                if let Ok(Some(message)) = execution_failure(&endpoint, &native_id).await {
+                    ctx.mark_native_retry_exhausted();
+                    ctx.mark_terminal_failure("opencode_terminal", &message);
+                    return Err(anyhow!("OpenCode V2: {message}"));
+                }
             }
             if let Err(error) = admission {
                 return Err(error);
@@ -171,6 +192,7 @@ async fn merge_projection(
     native_id: &str,
     messages: &[Value],
     previous: &HashSet<String>,
+    recorded: &mut HashSet<String>,
 ) -> Result<bool> {
     let mut answered = false;
     for message in messages.iter().filter(|m| {
@@ -191,6 +213,7 @@ async fn merge_projection(
         answered |= message
             .pointer("/time/completed")
             .is_some_and(|v| !v.is_null());
+        record_message_usage(ctx, message, recorded);
         if let Some(used) = opencode_used_tokens(message.get("tokens")) {
             ctx.report_usage(ContextUsage {
                 used_tokens: used,
@@ -223,11 +246,14 @@ async fn merge_projection(
             if child.pointer("/data/info/parentID").and_then(Value::as_str) != Some(native_id) {
                 return Err(anyhow!("OpenCode returned an unrelated subagent session"));
             }
-            part.children = self::messages(&child)?
+            let child_messages: Vec<_> = self::messages(&child)?
                 .iter()
                 .filter(|m| m["type"] == "assistant")
-                .flat_map(wire_parts)
                 .collect();
+            for message in &child_messages {
+                record_message_usage(ctx, message, recorded);
+            }
+            part.children = child_messages.into_iter().flat_map(wire_parts).collect();
         }
         for (part, _) in parts {
             ctx.upsert_part_preserving_children(part);
@@ -236,11 +262,68 @@ async fn merge_projection(
     Ok(answered)
 }
 
+/// A native step's own model (a sub-agent's included) once output proves it ran, and its tokens
+/// once it completes; each state is recorded once.
+fn record_message_usage(ctx: &TurnCtx, message: &Value, recorded: &mut HashSet<String>) {
+    let Some(id) = message["id"].as_str() else {
+        return;
+    };
+    let completed = message
+        .pointer("/time/completed")
+        .is_some_and(|time| !time.is_null());
+    let ran = completed
+        || message
+            .pointer("/time/streamed")
+            .is_some_and(|time| !time.is_null())
+        || message["content"]
+            .as_array()
+            .is_some_and(|content| !content.is_empty());
+    if !ran || !recorded.insert(format!("{id}:{completed}")) {
+        return;
+    }
+    ctx.record_native_usage(
+        id,
+        message.pointer("/model/id").and_then(Value::as_str),
+        message.pointer("/model/providerID").and_then(Value::as_str),
+        message
+            .get("tokens")
+            .filter(|_| completed)
+            .map(opencode_native_usage)
+            .unwrap_or_default(),
+    );
+}
+
 fn messages(projection: &Value) -> Result<&Vec<Value>> {
     projection
         .pointer("/data/messages")
         .and_then(Value::as_array)
         .ok_or_else(|| anyhow!("OpenCode V2 history response is invalid"))
+}
+
+async fn execution_failure(endpoint: &AgentEndpoint, native_id: &str) -> Result<Option<String>> {
+    let log = endpoint
+        .client
+        .get(format!(
+            "{}/api/experimental/session/{native_id}/log",
+            endpoint.base_url
+        ))
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+    Ok(last_execution_failure(&log))
+}
+
+/// The error of the last `session.execution.failed` event in a replayed SSE session log.
+fn last_execution_failure(log: &str) -> Option<String> {
+    log.lines()
+        .rev()
+        .filter_map(|line| line.strip_prefix("data:"))
+        .filter_map(|data| serde_json::from_str::<Value>(data.trim()).ok())
+        .find(|event| event["type"] == "session.execution.failed")
+        .map(|event| error_text(&event["data"]["error"]))
 }
 
 fn error_text(error: &Value) -> String {
@@ -633,6 +716,12 @@ fn selectable_model(model: &Value, connected: &HashSet<&str>) -> bool {
         })
 }
 
+/// Unknown for an empty `capabilities.input`, which is V2's placeholder for uncatalogued models.
+fn image_input(model: &Value) -> Option<bool> {
+    let input = model["capabilities"]["input"].as_array()?;
+    (!input.is_empty()).then(|| input.iter().any(|modality| modality == "image"))
+}
+
 pub(super) async fn detect(
     binary: crate::local::opencode::ResolvedBinary,
     mut info: HarnessInfo,
@@ -685,7 +774,8 @@ pub(super) async fn detect(
                     Some(
                         ModelInfo::new(format!("{provider}/{id}"))
                             .with_label(model["name"].as_str(), None)
-                            .with_reasoning(&variants),
+                            .with_reasoning(&variants)
+                            .with_image_input(image_input(model)),
                     )
                 })
                 .collect();
@@ -760,7 +850,7 @@ pub(super) async fn generate(
             body["model"] = json!({"providerID":provider,"id":model});
         }
         let result = tokio::time::timeout(timeout, async {
-            let response: Value = endpoint
+            let response = endpoint
                 .client
                 .post(format!(
                     "{}{}",
@@ -769,18 +859,25 @@ pub(super) async fn generate(
                 ))
                 .json(&body)
                 .send()
-                .await?
-                .error_for_status()?
-                .json()
                 .await?;
+            let status = response.status();
+            if !status.is_success() {
+                // The body carries the provider's reason; the URL is a throwaway local port.
+                let body = response.text().await.unwrap_or_default();
+                return Err(anyhow!(
+                    "{status}: {}",
+                    crate::local::harness::one_line(&body, 300)
+                ));
+            }
+            let response: Value = response.json().await?;
             response
                 .pointer("/data/text")
                 .and_then(Value::as_str)
                 .map(str::to_owned)
-                .ok_or_else(|| anyhow!("OpenCode generation returned no text"))
+                .ok_or_else(|| anyhow!("returned no reply"))
         })
         .await
-        .map_err(|_| anyhow!("OpenCode generation timed out"))
+        .map_err(|_| anyhow!("timed out after {}s", timeout.as_secs()))
         .and_then(|result| result);
         let _ = child.kill().await;
         let _ = child.wait().await;
@@ -822,7 +919,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = AgentEndpoint {
             base_url: format!("http://{}", listener.local_addr().unwrap()),
-            client: reqwest::Client::new(),
+            client: crate::net::loopback_client().build().unwrap(),
             protocol: crate::local::opencode::Protocol::V2,
             legacy_v2_api: false,
         };
@@ -884,6 +981,46 @@ mod tests {
                 .pointer("/state/metadata/sessionID")
                 .and_then(Value::as_str),
             Some("ses_child")
+        );
+    }
+
+    #[test]
+    fn execution_failure_comes_from_the_last_failed_log_event() {
+        let event = |seq: u64, kind: &str, data: Value| {
+            let event = json!({"id":format!("evt_{seq}"),"created":seq,"type":kind,
+                "durable":{"aggregateID":"ses_test","seq":seq,"version":1},"data":data});
+            format!("data: {event}\r\n\r\n")
+        };
+        let failed = |message: &str| json!({"sessionID":"ses_test","error":{"type":"provider.no-route","message":message}});
+        let log = [
+            event(
+                1,
+                "session.execution.started",
+                json!({"sessionID":"ses_test"}),
+            ),
+            event(
+                2,
+                "session.execution.failed",
+                failed("Model unavailable: a/old"),
+            ),
+            event(
+                3,
+                "session.execution.failed",
+                failed("Model unavailable: opencode-go/deepseek-v4.1-flash"),
+            ),
+            format!(
+                "data: {}\n\n",
+                json!({"type":"log.synced","aggregateID":"ses_test","seq":3})
+            ),
+        ]
+        .concat();
+        assert_eq!(
+            last_execution_failure(&log).as_deref(),
+            Some("Model unavailable: opencode-go/deepseek-v4.1-flash")
+        );
+        assert_eq!(
+            last_execution_failure(&event(1, "session.execution.succeeded", json!({}))),
+            None
         );
     }
 
@@ -950,5 +1087,14 @@ mod catalog_tests {
         assert!(selectable_model(&model, &anonymous));
         model["enabled"] = json!(false);
         assert!(!selectable_model(&model, &anonymous));
+    }
+
+    #[test]
+    fn image_input_reads_catalog_modalities() {
+        let with = |input: Value| image_input(&json!({"capabilities":{"input":input}}));
+        assert_eq!(with(json!(["text", "image"])), Some(true));
+        assert_eq!(with(json!(["text"])), Some(false));
+        assert_eq!(with(json!([])), None);
+        assert_eq!(image_input(&json!({})), None);
     }
 }

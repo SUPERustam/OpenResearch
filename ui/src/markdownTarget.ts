@@ -1,3 +1,5 @@
+import { defaultUrlTransform } from "react-markdown";
+
 export interface MarkdownTarget {
   path: string;
   query: string;
@@ -22,7 +24,7 @@ export function resolveMarkdownTarget(
 
   let pathname: string;
   try {
-    pathname = decodeURI(encodedPath);
+    pathname = decodeURIComponent(encodedPath);
   } catch {
     return null;
   }
@@ -48,8 +50,51 @@ export function resolveMarkdownTarget(
   };
 }
 
+/** Re-escapes a resolved path so resolving it again yields the same path. */
+export function encodeMarkdownPath(path: string): string {
+  return path.replace(/[%#?:]/g, encodeURIComponent);
+}
+
+/** An asset `src` inside an inline HTML figure, joined to the figure's folder
+ * as a target for the figure's own image resolver. */
+export function htmlFigureAssetTarget(source: string, src: string): string | null {
+  let folder: string;
+  try {
+    folder = decodeURIComponent(source.replaceAll("\\", "/").split("/").slice(0, -1).join("/"));
+  } catch {
+    return null;
+  }
+  const target = resolveMarkdownTarget(folder, src, true);
+  return target ? encodeMarkdownPath(target.path) + target.hash : null;
+}
+
+/** A cited file link's path; `resolveFilePath` takes the still-encoded target. */
+export function citedFilePath(path: string, resolveFilePath?: (path: string) => string | null): string | null {
+  if (resolveFilePath) return resolveFilePath(path);
+  try {
+    return decodeURI(path);
+  } catch {
+    return null;
+  }
+}
+
 export function markdownTargetUrl(url: string, target: MarkdownTarget): string {
   return `${url}${target.query ? `&${target.query}` : ""}${target.hash}`;
+}
+
+/** Split a cited `path:42`, `path:42:7`, `path:42-50`, or GitHub-style
+ * `path#L42[C3][-L50[C1]]` into the path and its first line. */
+export function splitLineSuffix(target: string): { path: string; line?: number } {
+  const match = /^(.+?)(?::(\d+)(?:[:-]\d+)?|#L(\d+)(?:C\d+)?(?:-L?\d+(?:C\d+)?)?)$/.exec(target);
+  if (!match) return { path: target };
+  const line = Number(match[2] ?? match[3]);
+  return line > 0 ? { path: match[1], line } : { path: match[1] };
+}
+
+/** First line of a `<file lines=…>` value: "20", "20-40", or "L20-L40". */
+export function firstCitedLine(lines: string): number | undefined {
+  const line = Number.parseInt(lines.replace(/^L/i, ""), 10);
+  return line > 0 ? line : undefined;
 }
 
 export function isWindowsDrivePath(src: string): boolean {
@@ -63,6 +108,11 @@ export function chatImageTarget(src: string): (Pick<MarkdownTarget, "path" | "ha
   if (!resolved) return null;
   // Local-image queries must not override the selected file or session.
   const target = { path: resolved.path, hash: resolved.hash };
+  // An encoded drive path (`C%3A/…`) decodes to `C:/…`, so classify the decoded
+  // path too — the re-resolve round trip keeps the absolute source.
+  if (isWindowsDrivePath(target.path)) {
+    return { ...target, path: target.path.replaceAll("\\", "/"), source: "absolute" };
+  }
   if (target.path.startsWith("/") || target.path.startsWith("~/") || windows) {
     return { ...target, source: "absolute" };
   }
@@ -70,4 +120,29 @@ export function chatImageTarget(src: string): (Pick<MarkdownTarget, "path" | "ha
     return { ...target, path: target.path.slice("artifacts/".length), source: "artifact" };
   }
   return { ...target, source: "checkout" };
+}
+
+interface HastNode {
+  tagName?: string;
+  children?: HastNode[];
+  properties?: Record<string, unknown>;
+}
+
+export function rehypeSafeUrls() {
+  return (tree: HastNode) => {
+    const visit = (node: HastNode) => {
+      for (const key of ["href", "src"]) {
+        if (node.properties && Object.hasOwn(node.properties, key)) {
+          const value = String(node.properties[key] || "");
+          // `Makefile:42` reads as an unknown protocol and is blanked, so the chip
+          // renderer gets the cited target out of band, never as a live href.
+          if (key === "href" && splitLineSuffix(value).line != null) node.properties["data-cited-href"] = value;
+          node.properties[key] = key === "src" && node.tagName === "img" && isWindowsDrivePath(value)
+            ? value : defaultUrlTransform(value);
+        }
+      }
+      node.children?.forEach(visit);
+    };
+    visit(tree);
+  };
 }

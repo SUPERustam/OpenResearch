@@ -82,7 +82,7 @@ async fn submit_controller_run(
         crate::compute::snapshot_script(&crate::local::bash::bash_path(&source.path), &run_command);
 
     // The run's env: everything the user synced (API keys), plus the tokens
-    // the run script expects. Exported inside run.sh (written owner-only).
+    // the run script expects. Passed to the launcher process.
     let mut env: HashMap<String, String> = crate::config::list_synced_env().into_iter().collect();
     if let Ok(hf_token) = crate::jobs::huggingface::resolve_token() {
         env.entry("HF_TOKEN".to_string()).or_insert(hf_token);
@@ -118,6 +118,9 @@ async fn submit_controller_run(
     })?;
 
     let mut descriptor = BackendDescriptor {
+        ssh_container: None,
+        monitoring_error: None,
+        cancellation_accepted: false,
         kind: kind.to_string(),
         namespace: None,
         job_id: Some(dir.to_string_lossy().into_owned()),
@@ -131,6 +134,8 @@ async fn submit_controller_run(
         ssh_port: None,
         ssh_user: None,
         timeout_secs: None,
+        cpus_per_task: None,
+        mem: None,
         source_digest: None,
         source_path: None,
         source_size: None,
@@ -156,6 +161,7 @@ async fn submit_controller_run(
         cancel_requested: store
             .get_run(&run_id)?
             .is_some_and(|run| run.cancel_requested),
+        cancel_reason: None,
         chat_session_id: args.launching_chat_session(),
     };
     store.upsert_run(&run)?;

@@ -27,4 +27,4 @@ Compat scripts: `scripts/test-opencode-compat.py`, `scripts/test-opencode-compat
 
 ## Other harnesses
 
-Claude, Codex, and Cursor each have a file here. Plan-mode read-only allowlist: `plan_gate.rs` (keep in sync with new read-only CLI verbs).
+Claude, Codex, Cursor, and Antigravity each have a file here. Plan-mode read-only allowlist: `plan_gate.rs` (keep in sync with new read-only CLI verbs).

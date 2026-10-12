@@ -69,10 +69,10 @@ export const getDataDirQuery = () => queryOptions({
   staleTime: 300_000,
 });
 
-export const getSshHostsQuery = () => queryOptions({
-  queryKey: workspaceKey("getSshHosts"),
-  queryFn: ({ signal }) => api.getSshHosts(signal),
-  staleTime: 300_000,
+export const getSshSettingsQuery = () => queryOptions({
+  queryKey: workspaceKey("getSshSettings"),
+  queryFn: ({ signal }) => api.getSshSettings(signal),
+  staleTime: 30_000,
 });
 
 export const getSshConfigQuery = () => queryOptions({
@@ -145,12 +145,15 @@ export const getHarnessesQuery = () => queryOptions({
   queryKey: workspaceKey("getHarnesses"),
   queryFn: ({ signal }) => api.getHarnesses(false, false, signal),
   staleTime: 300_000,
-  refetchInterval: (query) => query.state.data?.some((h) => h.accountLoading) ? 1_000 : false,
+  // Poll while anything is unresolved: `harness.catalog` is edge-triggered, so
+  // a fill that lands before the EventSource connects would otherwise strand a
+  // provisional payload until the 5-minute staleTime expires.
+  refetchInterval: (query) => query.state.data?.some((h) => h.accountLoading || h.catalogPending) ? 1_000 : false,
 });
 
-export const getSkillsQuery = (harness?: string) => queryOptions({
-  queryKey: workspaceKey("getSkills", harness ?? null),
-  queryFn: ({ signal }) => api.getSkills(signal, harness),
+export const getSkillsQuery = (harness?: string, projectId?: string) => queryOptions({
+  queryKey: workspaceKey("getSkills", harness ?? null, projectId ?? null),
+  queryFn: ({ signal }) => api.getSkills(signal, harness, projectId),
   select: (data) => data.skills,
   refetchInterval: (query) => query.state.data?.importing ? 2_000 : 30_000,
   staleTime: 300_000,
@@ -178,8 +181,15 @@ export const listUserSkillsQuery = () => queryOptions({
 });
 
 export async function refreshHarnesses(refresh = false, retryRejected = false) {
+  if (!refresh && !retryRejected) return queryClient.fetchQuery(getHarnessesQuery());
+  return fetchHarnesses(refresh, retryRejected);
+}
+
+/** The server's cached answer, skipping any in-flight poll that may predate a publish. */
+export const readHarnesses = () => fetchHarnesses(false, false);
+
+async function fetchHarnesses(refresh: boolean, retryRejected: boolean) {
   const options = getHarnessesQuery();
-  if (!refresh && !retryRejected) return queryClient.fetchQuery(options);
   await queryClient.cancelQueries(options);
   const data = await api.getHarnesses(refresh, retryRejected);
   if (isCurrentScope(options.queryKey)) queryClient.setQueryData(options.queryKey, data);

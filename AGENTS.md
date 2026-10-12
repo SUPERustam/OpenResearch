@@ -6,7 +6,7 @@
 
 This GitHub repo (`SUPERustam/OpenResearch`) is a fork of [`alphaXiv/OpenResearch`](https://github.com/alphaXiv/OpenResearch). Treat it as a **drop-in replacement for OpenResearch**: port and stay compatible with upstream behavior; do not invent fork-only product surfaces unless asked. Package version stays put unless someone is cutting a release.
 
-Self-update does **not** follow upstream. `orx update`, background auto-update, the macOS app manifest, remote installs, and cargo-dist releases all come from this fork (`REPO_URL` in `src/updates.rs`, `repository` in `Cargo.toml`). `build.rs` may also accept an alphaXiv Actions run for the production channel; that does not change the download URL. Literature search still uses alphaXiv.
+Self-update does **not** follow upstream. `orx update`, background auto-update, the macOS app manifest, remote installs, and cargo-dist releases all come from this fork (`REPO_URL` in `src/updates.rs`, `repository` in `Cargo.toml`). `build.rs` may also accept an alphaXiv Actions run for the production channel; that does not change the download URL. Literature search still uses alphaXiv. The sidebar, wordmark, document title, and footer say CoHyp.
 
 `openresearch.sh` is the companion service. It owns the website and documentation, accounts and organizations, sandbox provisioning, and managed-compute catalogs. Research projects, experiments, runs, logs, and artifacts remain local to `orx`.
 
@@ -23,7 +23,7 @@ Read this guide and each nested guide along the path you are editing. Paths belo
 | [`src/AGENTS.md`](src/AGENTS.md) | Rust crate layout, local vs hosted API |
 | [`src/commands/AGENTS.md`](src/commands/AGENTS.md) | CLI subcommands and `orx up` HTTP |
 | [`src/local/AGENTS.md`](src/local/AGENTS.md) | SQLite store, artifacts FS, demo seed, playbook |
-| [`src/local/harness/AGENTS.md`](src/local/harness/AGENTS.md) | Claude / Codex / OpenCode / Cursor adapters |
+| [`src/local/harness/AGENTS.md`](src/local/harness/AGENTS.md) | Claude / Codex / OpenCode / Cursor / Antigravity adapters |
 | [`scripts/AGENTS.md`](scripts/AGENTS.md) | Isolated `dev-slot` and OpenCode compat helpers |
 | [`agent-skills/AGENTS.md`](agent-skills/AGENTS.md) | Bundled research-agent skills and artifact layout |
 | [`demo/AGENTS.md`](demo/AGENTS.md) | Embedded nanochat demo project |
@@ -74,6 +74,11 @@ Probe harness state with `GET /api/harnesses?refresh=1` on the slot's backend.
 ## CI and release gates
 
 `.github/workflows/ci.yml` defines CI; `.github/AGENTS.md` records required branch-protection and release behavior. A package version bump on `main` triggers a release, so leave the version unchanged for ordinary fixes and ports.
+
+- GitHub protection for `main` must require the `fmt, clippy, test`, `version sanity`, and `linked issue` checks from GitHub Actions, including for administrators. Do not require a merge queue or require branches to be up to date. These settings are managed in GitHub, not by this file.
+- `linked issue` fails PRs from forks unless the description links an issue in this repository (e.g. `Closes #N`). PRs from branches in this repository are exempt, since only people with write access can push them. It runs on `pull_request_target`, so it must never check out or run PR code.
+- PR CI must test GitHub's simulated merge (`refs/pull/<number>/merge`), which `actions/checkout` selects by default for `pull_request` events, rather than checking out the PR head alone. Each run tests its merge candidate; subsequent changes to `main` do not automatically rerun open PRs.
+- CI also runs on `main`. Releases call the same CI workflow on the commit being packaged; publishing requires that run to succeed. Keep `./ci` in cargo-dist's `global-artifacts-jobs` when regenerating the release workflow; `allow-dirty` makes `dist generate` skip it, so follow the steps in `macos/DISTRIBUTION.md` ("CLI binaries").
 
 Minimum checks before a UI PR:
 

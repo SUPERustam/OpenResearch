@@ -1,7 +1,9 @@
-import type { ChatSession } from "../api";
+import type { InfiniteData } from "@tanstack/react-query";
+import type { ChatSession, SidebarChatPage } from "../api";
 import { markLiveUpdate } from "./live";
 import {
   refreshHarnesses,
+  getHarnessesQuery,
   getUpdateStatusQuery,
 } from "./settings";
 import { dispatchChat } from "./chatStore";
@@ -12,6 +14,7 @@ import {
   onProjectActivityEvent,
   onChatEvent,
   onHarnessAuth,
+  onHarnessCatalog,
   onUpdateStatus,
   useOrxEventStream,
 } from "../events";
@@ -77,15 +80,24 @@ export function QueryEvents() {
   });
   useEffect(() => {
     let activityTimer: ReturnType<typeof setTimeout> | undefined;
-    const offActivity = onProjectActivityEvent(() => {
+    let sidebarTimer: ReturnType<typeof setTimeout> | undefined;
+    const refreshSidebar = () => {
+      sidebarTimer ??= setTimeout(() => {
+        sidebarTimer = undefined;
+        invalidateFamilies(["listSidebarChatSessions"], scope);
+      }, 100);
+    };
+    const refreshActivity = () => {
       activityTimer ??= setTimeout(() => {
         activityTimer = undefined;
         invalidateFamilies(["listProjectActivity"], scope);
       }, 100);
-    });
+    };
+    const offActivity = onProjectActivityEvent(refreshActivity);
     const offMove = onDataDirMove((event) => { if (event.type === "done") invalidateFamilies(["getDataDir"], scope); });
     const offChat = onChatEvent((event) => {
       if (!isCurrentScope(scope)) return;
+      if (event.type === "session" || event.type === "sessionDeleted") refreshSidebar();
       if (event.type === "session") markLiveUpdate(queryClient, listChatSessionsQuery(event.session.projectId).queryKey, event.session.id);
       else if (event.type === "busy" || event.type === "usage") markLiveUpdate(queryClient, [...scope, "listChatSessions"], event.sessionId);
       if (event.type === "message") invalidateFamilies(["listChatAttachments"], scope);
@@ -105,16 +117,24 @@ export function QueryEvents() {
       } else if (event.type === "sessionDeleted") {
         removeSession(event.sessionId);
       } else if (event.type === "busy" || event.type === "usage") {
-        queryClient.setQueriesData<ChatSession[]>({ queryKey: [...scope, "listChatSessions"] }, (rows) => rows?.map((row) => row.id !== event.sessionId ? row : event.type === "busy" ? { ...row, busy: event.busy } : { ...row, contextUsage: event.usage }));
+        const update = (row: ChatSession) => row.id !== event.sessionId ? row : event.type === "busy" ? { ...row, busy: event.busy } : { ...row, contextUsage: event.usage };
+        queryClient.setQueriesData<ChatSession[]>({ queryKey: [...scope, "listChatSessions"] }, (rows) => rows?.map(update));
+        queryClient.setQueriesData<InfiniteData<SidebarChatPage>>({ queryKey: [...scope, "listSidebarChatSessions"] }, (data) => data && {
+          ...data, pages: data.pages.map((page) => ({ ...page, sessions: page.sessions.map(update) })),
+        });
       }
     });
     const offAuth = onHarnessAuth(() => { if (isCurrentScope(scope)) void refreshHarnesses(true).catch(() => {}); });
+    // The catalog fill already ran server-side; a plain read serves the
+    // updated cache — forcing a refresh here would spawn a second sweep. The
+    // query's 5-minute staleTime would swallow a bare fetchQuery, so bypass it.
+    const offCatalog = onHarnessCatalog(() => { if (isCurrentScope(scope)) void queryClient.fetchQuery({ ...getHarnessesQuery(), staleTime: 0 }).catch(() => {}); });
     const offUpdate = onUpdateStatus((status) => {
       if (!isCurrentScope(scope)) return;
       markLiveUpdate(queryClient, getUpdateStatusQuery().queryKey);
       queryClient.setQueryData(getUpdateStatusQuery().queryKey, status);
     });
-    return () => { clearTimeout(activityTimer); offActivity(); offMove(); offChat(); offAuth(); offUpdate(); };
+    return () => { clearTimeout(activityTimer); clearTimeout(sidebarTimer); offActivity(); offMove(); offChat(); offAuth(); offCatalog(); offUpdate(); };
   }, [scope[1]]);
   return null;
 }
