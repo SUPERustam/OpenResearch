@@ -16,7 +16,7 @@ import {
   getK8sSettingsQuery,
   getModalSettingsQuery,
   getSshMasterStatusQuery,
-  getSshHostsQuery,
+  getSshSettingsQuery,
   getSlurmSettingsQuery,
   getRaySettingsQuery,
   getOpenResearchSettingsQuery,
@@ -103,22 +103,24 @@ import {
   type SlurmPreflight,
   type SlurmSettings,
   type SshPreflight,
+  type SshExecutionPreflight,
+  testSshExecution,
   applyUpdate,
-  harnessModelLabel,
   installCli,
   setAutoUpdate as setAutoUpdateApi,
   type InstallChannel,
   type InstalledCli,
 } from "../api";
 import { onDataDirMove } from "../events";
-import { useRestartApp, useUpdateStatus } from "./UpdateBanner";
+import { releaseNotesUrl, useRestartApp, useUpdateStatus } from "./UpdateBanner";
 import { useThemePreference, type ThemePreference } from "../theme";
 import { m } from "../paraglide/messages.js";
 import { ltr } from "../i18n";
 import { setLocale, useLocale } from "../locale";
-import { getLocale, isLocale, type Locale } from "../paraglide/runtime.js";
+import { isLocale, type Locale } from "../paraglide/runtime.js";
 import { TokenForm } from "./GitTokenForm";
 import { renderNote } from "./agentNote";
+import { claudeProviderLabel } from "./claudeProvider";
 import { BackendBadge, BackendLogo } from "./BackendLogos";
 import { ProgressBar } from "./ProgressBar";
 import { OptionPicker } from "./ModelPicker";
@@ -126,6 +128,7 @@ import { HarnessLogo } from "./HarnessLogo";
 import { LocalModelSetup } from "./LocalModelSetup";
 import { StatusBadge } from "./StatusBadge";
 import { OpenResearchSetupTerminal, SettingsCommandTerminal, SshConnectTerminal, SshTerminalTranscript } from "./SshConnectTerminal";
+import { SshExecutionSettings, SshDefaultHost } from "./SshExecutionSettings";
 import { SshConfigDialog } from "./SshConfigDialog";
 import {
   Badge,
@@ -350,8 +353,10 @@ function CommandRunTerminal({ run, onComplete, onClose }: {
 // --- harnesses ---------------------------------------------------------------
 
 function harnessStatus(h: Harness): { cls: string; variant: BadgeVariant; label: string } {
+  if (h.catalogPending) return { cls: "warn", variant: "warning", label: m.onboarding_checking() };
+  if (h.authCheckFailed) return { cls: "warn", variant: "warning", label: m.settings_page_unable_to_verify() };
   if (h.agentReady && !h.authenticated && h.authMethod !== "local") return { cls: "warn", variant: "warning", label: m.onboarding_not_signed_in() };
-  if (h.agentReady) return { cls: "ok", variant: "success", label: h.authMethod === "local" ? m.onboarding_ready() : m.settings_page_signed_in() };
+  if (h.agentReady) return { cls: "ok", variant: "success", label: h.authMethod === "thirdParty" || claudeProviderLabel(h) ? m.settings_page_ready_to_use() : h.authMethod === "local" ? m.onboarding_ready() : m.settings_page_signed_in() };
   // Not installed — the same blocker whether or not there's saved auth: the
   // CLI has to be installed before anything can run. Amber "action needed".
   if (!h.installed) return { cls: "warn", variant: "warning", label: m.settings_page_not_installed() };
@@ -366,8 +371,11 @@ function harnessStatus(h: Harness): { cls: string; variant: BadgeVariant; label:
 
 function AuthLabel({ h }: { h: Harness }) {
   if (h.id === "opencode" && h.agentReady && !h.authenticated && !h.authMethod) return <>{m.settings_free_models_no_sign_in()}</>;
+  const provider = claudeProviderLabel(h);
+  if (provider) return <>{provider}</>;
   if (!h.authMethod) return <>—</>;
   if (h.authMethod === "local") return <>{m.projects_local()}</>;
+  if (h.authMethod === "thirdParty") return <>{m.settings_providers()}</>;
   return <>{h.authMethod === "oauth" ? m.settings_oauth_login() : m.onboarding_api_key()}</>;
 }
 
@@ -458,7 +466,7 @@ function HarnessesTab({ remote }: { remote: boolean }) {
           <div className="settings-card-head flex items-center gap-2.5 mb-3">
             <Badge variant={harnessStatus(h).variant}>{harnessStatus(h).label}</Badge>
             <div className="spacer flex-1" />
-            {!remote && h.installed && !h.installBroken && !h.authenticated && !h.needsConfigRepair && h.authMethod !== "local" && h.authMethod !== "apiKey" && h.authState !== "unsupported" && (
+            {!remote && !h.catalogPending && h.installed && !h.installBroken && !h.authenticated && !h.needsConfigRepair && (h.id === "claude-code" ? h.loginEligible : h.authMethod !== "local" && h.authMethod !== "apiKey" && h.authState !== "unsupported") && (
               <Button size="small" onClick={() => setSetupHarness(h)} disabled={!setupCommands.data} aria-haspopup="dialog">
                 <SquareTerminal size={14} /> {m.harness_setup_login()}
               </Button>
@@ -472,10 +480,12 @@ function HarnessesTab({ remote }: { remote: boolean }) {
             <span className="v">{h.binPath ?? m.settings_not_found_on_path()}</span>
             <span className="k">{m.settings_page_version()}</span>
             <span className="v">{h.version ?? "—"}</span>
-            <span className="k">{m.settings_page_auth()}</span>
-            <span className="v">
-              <AuthLabel h={h} />
-            </span>
+            {(h.authMethod === "apiKey" || h.authMethod === "thirdParty" || h.authMethod === "local" || claudeProviderLabel(h)) && (
+              <>
+                <span className="k">{m.settings_page_auth()}</span>
+                <span className="v"><AuthLabel h={h} /></span>
+              </>
+            )}
             {h.account && (
               <>
                 <span className="k">{h.id === "opencode" ? m.settings_providers() : m.settings_page_account()}</span>
@@ -488,17 +498,13 @@ function HarnessesTab({ remote }: { remote: boolean }) {
                 <span className="v">{h.org}</span>
               </>
             )}
-            {h.plan && (
-              <>
-                <span className="k">{m.settings_page_plan()}</span>
-                <span className="v">{h.plan}</span>
-              </>
-            )}
             <span className="k">{m.settings_page_agent_models()}</span>
             <span className="v">
-              {h.models.length > 0
-                ? m.settings_models_available({ count: fmtNumber(h.models.length), models: new Intl.ListFormat(getLocale()).format(h.models.slice(0, 4).map((model) => ltr(harnessModelLabel(model)))) })
-                : m.settings_none()}
+              {h.catalogPending
+                ? m.onboarding_checking()
+                : h.models.length > 0
+                ? m.settings_models_available({ count: fmtNumber(h.models.length) })
+                : h.agentReady ? m.model_picker_default_model() : m.settings_none()}
             </span>
           </div>
           <RunnableNote
@@ -790,7 +796,7 @@ function useSshMasterStatuses(hosts: string[]) {
   return [statuses, markRunning] as const;
 }
 
-function HostTestCell({ test, connecting, masterRunning }: { test: SshPreflight | undefined; connecting: boolean; masterRunning: boolean | null | undefined }) {
+function HostTestCell({ test, connecting, masterRunning, containerFailed = false }: { test: SshPreflight | undefined; connecting: boolean; masterRunning: boolean | null | undefined; containerFailed?: boolean }) {
   if (connecting)
     return (
       <span role="status">
@@ -800,7 +806,7 @@ function HostTestCell({ test, connecting, masterRunning }: { test: SshPreflight 
   if (test === undefined) return <Badge className={CONNECTION_BADGE_IDLE_CLASS}>{m.settings_page_not_checked()}</Badge>;
   const missingTools = test.missingTools ?? [];
   const disconnected = test.reachable && test.toolsFound && masterRunning === false;
-  const badge = !test.reachable ? (
+  const badge = !test.reachable || containerFailed ? (
     <Badge className="rounded-sm" variant="error">{m.settings_page_failed()}</Badge>
   ) : !test.toolsFound ? (
     <Badge className="rounded-sm" variant="error">
@@ -821,17 +827,20 @@ function HostTestCell({ test, connecting, masterRunning }: { test: SshPreflight 
   );
 }
 
-function SshSection({ remote = false }: { remote?: boolean }) {
-  const hostsOptions = getSshHostsQuery();
+function SshSection() {
+  const hostsOptions = getSshSettingsQuery();
   const hostsQuery = useQuery(hostsOptions);
-  const hosts = hostsQuery.data ?? (hostsQuery.isError ? [] : null);
+  const hosts = hostsQuery.data?.hosts ?? (hostsQuery.isError ? [] : null);
   const [configOpen, setConfigOpen] = useState(false);
-  const [tests, setTests] = useState<Record<string, SshPreflight>>({});
+  const [tests, setTests] = useState<Record<string, SshExecutionPreflight>>({});
+  const [drafts, setDrafts] = useState<Record<string, string | null>>({});
+  const activeAttempt = useRef(0);
+  const [probing, setProbing] = useState(false);
   const [expandedHosts, setExpandedHosts] = useState<Record<string, boolean>>({});
   const [connectingHost, setConnectingHost] = useState<string | null>(null);
   const [connectionFailed, setConnectionFailed] = useState(false);
   const [connectionAttempt, setConnectionAttempt] = useState(0);
-  const checkedHosts = remote ? [] : hosts
+  const checkedHosts = hosts
     ?.filter((host) => {
       const test = tests[host.host] ?? host.lastTest;
       return test?.reachable && test.toolsFound;
@@ -840,6 +849,8 @@ function SshSection({ remote = false }: { remote?: boolean }) {
   const [masterRunning, markMasterRunning] = useSshMasterStatuses(checkedHosts);
 
   function connect(host: string) {
+    activeAttempt.current += 1;
+    setProbing(false);
     setConnectionFailed(false);
     setConnectionAttempt((attempt) => attempt + 1);
     setConnectingHost(host);
@@ -847,6 +858,8 @@ function SshSection({ remote = false }: { remote?: boolean }) {
   }
 
   function cancelConnect() {
+    activeAttempt.current += 1;
+    setProbing(false);
     setConnectionFailed(false);
     setConnectingHost(null);
   }
@@ -857,8 +870,10 @@ function SshSection({ remote = false }: { remote?: boolean }) {
 
   return (
     <>
-      <div className="mb-3 flex justify-end">
-        <Button variant="ghost" onClick={() => setConfigOpen(true)}>
+      {hostsQuery.error && <p className="text-sm text-accent-red">{hostsQuery.error.message}</p>}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        {hostsQuery.data && <SshDefaultHost settings={hostsQuery.data} />}
+        <Button variant="ghost" className="ms-auto" onClick={() => setConfigOpen(true)}>
           <Settings size={14} /> {m.ssh_configure_hosts()}
         </Button>
       </div>
@@ -872,45 +887,51 @@ function SshSection({ remote = false }: { remote?: boolean }) {
         <div className="border-y border-border-variant divide-y divide-border-variant">
           {hosts.map((h) => {
             // Session-local result wins; the persisted one covers restarts.
-            const hostTest = tests[h.host] ?? h.lastTest;
+            const reference = drafts[h.host] === undefined ? h.container ?? null : drafts[h.host];
+            const executionTest = tests[h.host];
+            const containerTest = reference !== null && executionTest?.container?.reference === reference.trim()
+              ? executionTest : undefined;
+            const hostTest = reference !== null ? containerTest
+              : executionTest?.container ? h.lastTest : executionTest ?? h.lastTest;
+            const containerError = containerTest?.container?.error;
+            const containerFailed = containerTest?.container?.ready === false;
+            const connectionError = hostTest?.error || containerError;
             const connecting = connectingHost === h.host;
             const open = expandedHosts[h.host] ?? false;
-            const hasTerminal = !remote && (connecting || hostTest?.reachable === false);
+            const hasTerminal = connecting || Boolean(connectionError);
             const address =
               `${h.user ? `${h.user}@` : ""}${h.hostname ?? h.host}${h.port ? `:${h.port}` : ""}`;
             return (
               <div key={h.host}>
                 <div
-                  className="flex items-center gap-3 py-3 px-2"
+                  className="flex items-center gap-3 py-3"
                 >
                   <div className="flex min-w-0 flex-1 items-center gap-2.5">
-                    {hasTerminal ? (
-                      <button
-                        type="button"
-                        className="flex-none inline-flex items-center p-0.5 rounded-sm [&:hover]:bg-panel"
-                        aria-expanded={open}
-                        aria-label={open ? m.a11y_collapse_item({ name: ltr(h.host) }) : m.a11y_expand_item({ name: ltr(h.host) })}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          toggle(h.host, open);
-                        }}
-                      >
-                        <ChevronDown
-                          size={15}
-                          className={`text-muted transition-transform duration-120 ease-standard${open ? " rotate-180" : ""}`}
-                        />
-                      </button>
-                    ) : (
-                      <span className="w-5 flex-none" aria-hidden="true" />
-                    )}
                     <div className="min-w-0">
                       <div className="truncate text-base font-medium text-text" title={h.host}>{h.host}</div>
                       <div className="mt-1 truncate text-sm text-subtext" title={address}>{address}</div>
                     </div>
                   </div>
-                  {!remote && <div className="grid flex-none grid-cols-[8.5rem_5rem] items-center gap-x-12">
-                    <div className="text-start">
-                      <HostTestCell test={hostTest} connecting={connecting && !connectionFailed} masterRunning={masterRunning[h.host]} />
+                  <div className="grid flex-none grid-cols-[8.5rem_5rem] items-center gap-x-12">
+                    <div className="flex items-center gap-2 text-start">
+                      <HostTestCell test={hostTest} connecting={connecting && !connectionFailed} masterRunning={masterRunning[h.host]} containerFailed={containerFailed} />
+                      {hasTerminal && (
+                        <button
+                          type="button"
+                          className="flex-none inline-flex items-center p-0.5 rounded-sm [&:hover]:bg-panel"
+                          aria-expanded={open}
+                          aria-label={open ? m.a11y_collapse_item({ name: ltr(h.host) }) : m.a11y_expand_item({ name: ltr(h.host) })}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            toggle(h.host, open);
+                          }}
+                        >
+                          <ChevronDown
+                            size={18}
+                            className={`text-muted transition-transform duration-120 ease-standard${open ? " rotate-180" : ""}`}
+                          />
+                        </button>
+                      )}
                     </div>
                     <Button size="small"
                       type="button"
@@ -920,26 +941,36 @@ function SshSection({ remote = false }: { remote?: boolean }) {
                         if (connecting && !connectionFailed) cancelConnect();
                         else connect(h.host);
                       }}
-                      disabled={!connecting && connectingHost !== null && !connectionFailed}
+                      disabled={!connecting && ((connectingHost !== null && !connectionFailed) || (reference !== null && !reference.trim()))}
                     >
                       {connecting
                         ? connectionFailed
                           ? m.app_retry()
                           : m.settings_page_cancel()
-                        : hostTest?.reachable === false
+                        : hostTest?.reachable === false || containerFailed
                           ? m.app_retry()
                           : hostTest
                             ? m.settings_reconnect()
                             : m.settings_connect()}
                     </Button>
-                  </div>}
+                  </div>
                 </div>
+                <SshExecutionSettings host={h} connecting={connecting && !connectionFailed} reference={reference}
+                  onChange={(value) => {
+                    if (connecting) cancelConnect();
+                    setDrafts((drafts) => ({ ...drafts, [h.host]: value }));
+                    setTests((tests) => {
+                      const next = { ...tests };
+                      delete next[h.host];
+                      return next;
+                    });
+                  }} />
                 {hasTerminal && (open || connecting) && (
-                  <div className={`border-t border-t-border-variant py-3 pe-2 ps-10${open ? "" : " hidden"}`}>
-                    {!connecting && hostTest?.error && (
-                      <SshTerminalTranscript host={h.host} transcript={hostTest.error} />
+                  <div className={`border-t border-t-border-variant py-3${open ? "" : " hidden"}`}>
+                    {!connecting && connectionError && (
+                      <SshTerminalTranscript host={h.host} transcript={connectionError} />
                     )}
-                    {connecting && (
+                    {connecting && !probing && (
                       <SshConnectTerminal
                         key={connectionAttempt}
                         host={h.host}
@@ -947,16 +978,40 @@ function SshSection({ remote = false }: { remote?: boolean }) {
                         active={open}
                         onComplete={(complete) => {
                           if (complete.backend !== "ssh") return;
-                          setTests((tests) => ({ ...tests, [h.host]: complete.result }));
                           markMasterRunning(h.host);
-                          setConnectionFailed(false);
-                          setConnectingHost(null);
+                          const attempt = activeAttempt.current;
+                          if (reference === null) {
+                            setTests((tests) => ({ ...tests, [h.host]: { ...complete.result, container: null } }));
+                            setConnectionFailed(false);
+                            setConnectingHost(null);
+                            return;
+                          }
+                          setProbing(true);
+                          void testSshExecution(h.host, reference.trim()).then((result) => {
+                            if (activeAttempt.current !== attempt) return;
+                            setTests((tests) => ({ ...tests, [h.host]: {
+                              ...result,
+                              container: result.container ?? { reference: reference.trim(), ready: false, error: result.error ?? null },
+                            } }));
+                          }).catch((error: unknown) => {
+                            if (activeAttempt.current !== attempt) return;
+                            setTests((tests) => ({ ...tests, [h.host]: {
+                              ...complete.result,
+                              container: { reference: reference.trim(), ready: false, error: error instanceof Error ? error.message : String(error) },
+                            } }));
+                          }).finally(() => {
+                            if (activeAttempt.current !== attempt) return;
+                            setProbing(false);
+                            setConnectionFailed(false);
+                            setConnectingHost(null);
+                          });
                         }}
                         onError={(error) => {
                           setConnectionFailed(true);
                           setTests((tests) => ({
                             ...tests,
                             [h.host]: {
+                              container: reference === null ? null : { reference: reference.trim(), ready: false, error },
                               reachable: false,
                               toolsFound: false,
                               missingTools: [],
@@ -996,7 +1051,7 @@ function SlurmTestBadge({ test, connecting, masterRunning }: { test: SlurmPrefli
   return <Badge className="rounded-sm" variant="success">{m.settings_page_ready()}</Badge>;
 }
 
-function SlurmSection({ remote = false }: { remote?: boolean }) {
+function SlurmSection() {
   const saveSlurmSettingsMutation = useMutation({ mutationFn: saveSlurmSettings });
 
   const settingsOptions = getSlurmSettingsQuery();
@@ -1010,13 +1065,15 @@ function SlurmSection({ remote = false }: { remote?: boolean }) {
   const [partition, setPartition] = useState("");
   const [account, setAccount] = useState("");
   const [timeLimit, setTimeLimit] = useState("");
+  const [cpusPerTask, setCpusPerTask] = useState("");
+  const [mem, setMem] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [test, setTest] = useState<SlurmPreflight | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [connectionFailed, setConnectionFailed] = useState(false);
   const [connectionAttempt, setConnectionAttempt] = useState(0);
-  const readyHost = !remote && host && test?.reachable && test.slurmFound && test.toolsFound ? [host] : [];
+  const readyHost = host && test?.reachable && test.slurmFound && test.toolsFound ? [host] : [];
   const [masterRunning, markMasterRunning] = useSshMasterStatuses(readyHost);
 
   function connect() {
@@ -1031,6 +1088,8 @@ function SlurmSection({ remote = false }: { remote?: boolean }) {
     setPartition(s.partition ?? "");
     setAccount(s.account ?? "");
     setTimeLimit(s.timeLimit ?? "");
+    setCpusPerTask(s.cpusPerTask === null ? "" : String(s.cpusPerTask));
+    setMem(s.mem ?? "");
   };
 
   const previousSettings = useRef<SlurmSettings | null>(null);
@@ -1042,20 +1101,26 @@ function SlurmSection({ remote = false }: { remote?: boolean }) {
       && partition.trim() === (previous.partition ?? "")
       && account.trim() === (previous.account ?? "")
       && timeLimit.trim() === (previous.timeLimit ?? "")
+      && cpusPerTask.trim() === (previous.cpusPerTask === null ? "" : String(previous.cpusPerTask))
+      && mem.trim() === (previous.mem ?? "")
     ))) {
       setHost(settings.host ?? "");
       setPartition(settings.partition ?? "");
       setAccount(settings.account ?? "");
       setTimeLimit(settings.timeLimit ?? "");
+      setCpusPerTask(settings.cpusPerTask === null ? "" : String(settings.cpusPerTask));
+      setMem(settings.mem ?? "");
     }
-  }, [settings, host, partition, account, timeLimit]);
+  }, [settings, host, partition, account, timeLimit, cpusPerTask, mem]);
 
   const unchanged =
     settings !== null &&
     host === (settings.host ?? "") &&
     partition.trim() === (settings.partition ?? "") &&
     account.trim() === (settings.account ?? "") &&
-    timeLimit.trim() === (settings.timeLimit ?? "");
+    timeLimit.trim() === (settings.timeLimit ?? "") &&
+    cpusPerTask.trim() === (settings.cpusPerTask === null ? "" : String(settings.cpusPerTask)) &&
+    mem.trim() === (settings.mem ?? "");
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -1069,6 +1134,9 @@ function SlurmSection({ remote = false }: { remote?: boolean }) {
           partition: partition.trim(),
           account: account.trim(),
           timeLimit: timeLimit.trim(),
+          // Blank means "clear it"; the API reads 0 as back-to-partition-default.
+          cpusPerTask: Number(cpusPerTask.trim()) || 0,
+          mem: mem.trim(),
         }),
       );
     } catch (err) {
@@ -1115,29 +1183,27 @@ function SlurmSection({ remote = false }: { remote?: boolean }) {
               </label>
             </div>
             <div className="actions">
-              {!remote && (
-                <Button
-                  type="button"
-                  onClick={() => {
-                    if (connecting && !connectionFailed) {
-                      setConnectionFailed(false);
-                      setConnecting(false);
-                    } else {
-                      connect();
-                    }
-                  }}
-                  disabled={!host}
-                  title={host ? undefined : m.settings_pick_login_node()}
-                >
-                  {connecting
-                    ? connectionFailed
-                      ? m.app_retry()
-                      : m.settings_page_cancel()
-                    : test
-                      ? m.settings_reconnect()
-                      : m.settings_connect()}
-                </Button>
-              )}
+              <Button
+                type="button"
+                onClick={() => {
+                  if (connecting && !connectionFailed) {
+                    setConnectionFailed(false);
+                    setConnecting(false);
+                  } else {
+                    connect();
+                  }
+                }}
+                disabled={!host}
+                title={host ? undefined : m.settings_pick_login_node()}
+              >
+                {connecting
+                  ? connectionFailed
+                    ? m.app_retry()
+                    : m.settings_page_cancel()
+                  : test
+                    ? m.settings_reconnect()
+                    : m.settings_connect()}
+              </Button>
               <span role="status">
                 <SlurmTestBadge
                   test={test}
@@ -1186,6 +1252,30 @@ function SlurmSection({ remote = false }: { remote?: boolean }) {
                   spellCheck={false}
                 />
               </label>
+              <div className="row2 mt-3">
+                <label>
+                  {m.settings_slurm_cpus_per_job()}
+                  <Input
+                    type="number"
+                    min={1}
+                    value={cpusPerTask}
+                    onChange={(e) => setCpusPerTask(e.target.value)}
+                    placeholder={m.settings_slurm_cpus_placeholder()}
+                    autoComplete="off"
+                  />
+                </label>
+                <label>
+                  {m.settings_slurm_memory()}
+                  <Input
+                    type="text"
+                    value={mem}
+                    onChange={(e) => setMem(e.target.value)}
+                    placeholder={m.settings_slurm_memory_placeholder()}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </label>
+              </div>
             </div>
             {error && <div className="error">{error}</div>}
             <div className="actions">
@@ -1194,7 +1284,7 @@ function SlurmSection({ remote = false }: { remote?: boolean }) {
               </Button>
             </div>
           </form>
-          {!remote && connecting && (
+          {connecting && (
             <SshConnectTerminal
               key={connectionAttempt}
               host={host}
@@ -1828,8 +1918,8 @@ function BackendDetailPage({
         )}
       </div>
       <div className="mt-6 font-sans text-base text-text [&_.settings-card]:mb-0 [&_.settings-form]:mt-6 [&_.settings-form]:border-t-0 [&_.settings-form]:pt-0 [&>.settings-form:first-child]:mt-0 [&>div:first-child]:border-t-0">
-        {target.id === "ssh" && <SshSection remote={remote} />}
-        {target.id === "slurm" && <SlurmSection remote={remote} />}
+        {target.id === "ssh" && <SshSection />}
+        {target.id === "slurm" && <SlurmSection />}
         {target.id === "openresearch" && <OpenResearchSection remote={remote} />}
       </div>
     </>
@@ -2514,6 +2604,9 @@ const LOCALE_CHOICES: { id: Locale; label: string }[] = [
   { id: "ar", label: "العربية" },
   { id: "es", label: "Español" },
   { id: "hi", label: "हिन्दी" },
+  { id: "ko", label: "한국어" },
+  { id: "ja", label: "日本語" },
+  { id: "pl", label: "Polski" },
 ];
 
 function AppearanceTab() {
@@ -2594,6 +2687,7 @@ function AppearanceTab() {
 const CHANNEL_LABELS: Record<InstallChannel, () => string> = {
   installer: m.updates_channel_installer,
   "app-bundle": m.updates_channel_app,
+  appimage: m.updates_channel_appimage,
   portable: m.updates_channel_portable,
   cargo: m.updates_channel_cargo,
   homebrew: m.updates_channel_homebrew,
@@ -2720,6 +2814,9 @@ function UpdatesTab() {
                   {status.updateAvailable
                     ? m.settings_install_release_now()
                     : m.settings_checks_automatically()}
+                  {status.updateAvailable && status.latestTag && (
+                    <> <a href={releaseNotesUrl(status.latestTag)} target="_blank" rel="noreferrer" className="underline">{m.settings_release_notes()}</a></>
+                  )}
                 </p>
               </div>
               <Button size="small"
@@ -3501,7 +3598,7 @@ function InstancesTable({ instances, emptyLabel }: { instances: Run[]; emptyLabe
   }
   return (
     <div className="instances-table-wrap overflow-x-auto">
-      <table className="runs-table w-full border-collapse bg-background text-base [&_th]:text-start [&_th]:text-text [&_th]:text-sm [&_th]:font-medium [&_th]:py-2 [&_th]:px-3 [&_th]:border-b [&_th]:border-b-border [&_th]:sticky [&_th]:top-0 [&_th]:bg-background [&_th]:z-1 [&_td]:py-2 [&_td]:px-3 [&_td]:border-b [&_td]:border-b-divider-faint [&_td]:whitespace-nowrap [&_tr:last-child_td]:border-b-0 [&_tr.clickable]:cursor-pointer [&_tr.clickable:hover_td]:bg-canvas">
+      <table className="runs-table w-full border-collapse bg-background text-base [&_th]:text-start [&_th]:text-text [&_th]:text-sm [&_th]:font-medium [&_th]:py-2 [&_th]:px-3 [&_th]:border-b [&_th]:border-b-border [&_th]:sticky [&_th]:top-0 [&_th]:bg-background [&_th]:z-1 [&_td]:py-2 [&_td]:px-3 [&_td]:border-b [&_td]:border-b-divider-faint [&_td]:whitespace-nowrap [&_tr:last-child_td]:border-b-0 [&_tr.clickable]:cursor-pointer [&_tr.clickable:hover_td]:bg-surface">
         <thead>
           <tr>
             <th>{m.settings_page_backend()}</th>
@@ -3568,7 +3665,7 @@ function ComputeActivity({ projectId, onViewHistory }: { projectId?: string; onV
   const past = instances?.filter((i) => !isLive(i.status)).sort(byRecent);
 
   return (
-    <section className="compute-activity [&_.count-badge]:inline-flex [&_.count-badge]:items-center [&_.count-badge]:justify-center [&_.count-badge]:min-w-4.5 [&_.count-badge]:h-4.5 [&_.count-badge]:py-0 [&_.count-badge]:px-[5px] [&_.count-badge]:rounded-md [&_.count-badge]:bg-canvas [&_.count-badge]:border [&_.count-badge]:border-border [&_.count-badge]:text-xs [&_.count-badge]:font-medium [&_.count-badge]:text-text mt-5.5 mx-0 mb-8">
+    <section className="compute-activity [&_.count-badge]:inline-flex [&_.count-badge]:items-center [&_.count-badge]:justify-center [&_.count-badge]:min-w-4.5 [&_.count-badge]:h-4.5 [&_.count-badge]:py-0 [&_.count-badge]:px-[5px] [&_.count-badge]:rounded-md [&_.count-badge]:bg-surface [&_.count-badge]:border [&_.count-badge]:border-border [&_.count-badge]:text-xs [&_.count-badge]:font-medium [&_.count-badge]:text-text mt-5.5 mx-0 mb-8">
       <div className="compute-activity-head flex items-start justify-between gap-5 mb-3.5 [&_h2]:flex [&_h2]:items-center [&_h2]:gap-2 [&_h2]:m-0 [&_h2]:text-lg [@media((max-width:_640px))]:items-stretch [@media((max-width:_640px))]:flex-col">
         <div>
           <h2>

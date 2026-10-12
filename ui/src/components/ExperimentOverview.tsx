@@ -13,6 +13,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { experimentArtifactFiles } from "../experimentArtifacts";
 import { getArtifactsQuery } from "../queries/files";
 import {
+  experimentMonitoringError,
   fmtDuration,
   runDisplayStatus,
   timeAgo,
@@ -71,6 +72,7 @@ export function ExperimentOverview({
   onOpenArtifact: (path: string, intent: TabOpenIntent) => void;
 }) {
   const latestRun = runs[0] ?? null;
+  const monitoringError = experimentMonitoringError(runs);
   const hasLiveRun = runs.some(
     (run) => run.status === "running" || run.status === "starting",
   );
@@ -185,6 +187,11 @@ export function ExperimentOverview({
               </div>
               {latestRun.command && (
                 <code className={EXPERIMENT_OVERVIEW_COMMAND_CLASS_NAME}>$ {latestRun.command}</code>
+              )}
+              {monitoringError && (
+                <p className="experiment-overview-monitoring mt-4 text-accent-amber text-sm wrap-anywhere">
+                  {monitoringError}
+                </p>
               )}
               {latestRun.resultMarkdown && (
                 <div

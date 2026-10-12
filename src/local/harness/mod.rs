@@ -29,11 +29,13 @@ pub(crate) mod title;
 
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use futures::StreamExt;
 
-use crate::error::Result;
+use crate::error::{anyhow, Error, Result};
 use crate::local::chat::{
     stored_to_wire, DeliveryState, PromptAnswer, ResumeCtx, SteerMessage, SteerReceiver, TurnCtx,
     WirePart, WirePrompt,
@@ -41,7 +43,10 @@ use crate::local::chat::{
 use crate::store::Store;
 
 pub(crate) use claude::{question_prompt, should_synthesize_plan, synthesize_resume};
-pub(crate) use detect::unique as unique_bins;
+pub(crate) use detect::{
+    detect_spawn_output_timed, probe_timing_scope, spawn_retrying_busy, unique as unique_bins,
+    ProbeTiming, ProbeTimingSink,
+};
 pub use detect::{HarnessAuthState, HarnessInfo, ModelInfo};
 pub use options::{HarnessOptions, PermissionMode};
 pub use plan_gate::command_is_readonly;
@@ -118,12 +123,20 @@ pub(crate) fn native_recovery_snapshot(session_id: &str, current_turn_id: &str) 
     let Ok(messages) = store.list_chat_messages(session_id) else {
         return String::new();
     };
+    transcript_snapshot(
+        messages
+            .iter()
+            .filter(|message| current_user_id.as_deref() != Some(message.id.as_str())),
+    )
+}
+
+/// The newest [`RECOVERY_SNAPSHOT_BYTES`] of a transcript, flattened to text.
+pub(crate) fn transcript_snapshot<'a>(
+    messages: impl IntoIterator<Item = &'a crate::store::StoredChatMessage>,
+) -> String {
     let mut entries = Vec::new();
     for message in messages {
-        if current_user_id.as_deref() == Some(message.id.as_str()) {
-            continue;
-        }
-        let wire = stored_to_wire(&message);
+        let wire = stored_to_wire(message);
         let mut lines = Vec::new();
         recovery_part_lines(&wire.parts, &mut lines);
         if !lines.is_empty() {
@@ -247,6 +260,8 @@ pub enum ResumeAction {
 
 /// One coding-agent integration. See the module docs for the capability model.
 #[async_trait]
+// async-trait marks its boxed futures `#[must_use]`; clippy 1.99 flags that generated code.
+#[allow(clippy::double_must_use)]
 pub trait Harness: Send + Sync {
     /// Canonical, stable id used on the wire and in the store
     /// (e.g. `"claude-code"`). Must be unique across the registry.
@@ -269,6 +284,21 @@ pub trait Harness: Send + Sync {
         None
     }
 
+    /// The fast first pass of [`Harness::detect`]: install, auth, and
+    /// `agent_ready` only — no model-catalog or capability probes, which are
+    /// the subprocesses that stall cold `/api/harnesses` calls for seconds.
+    /// Install/auth come from filesystem and env evidence alone; one
+    /// conditional exception is a single auth child where the login may live
+    /// in an OS credential store the filesystem cannot see (Claude's
+    /// `ProbeCli`). An installed harness's answer is provisional — `detect_one`
+    /// marks it `catalog_pending` and clamps readiness — so the caller can
+    /// complete it in the background.
+    /// Default is the full detect, for harnesses whose auth *is* the catalog
+    /// probe (Antigravity) or that have nothing expensive to defer.
+    async fn detect_snapshot(&self) -> Option<HarnessInfo> {
+        self.detect().await
+    }
+
     /// Run one chat turn: spawn the CLI, parse its event stream, push wire
     /// parts onto `ctx`. Default is "not a chat harness".
     async fn run_turn(&self, _ctx: &mut TurnCtx) -> TurnResult {
@@ -284,6 +314,13 @@ pub trait Harness: Send + Sync {
     /// per installation (codex's legacy exec path can't steer).
     fn supports_steering(&self) -> bool {
         false
+    }
+
+    /// Compact this session's context in the harness's own store. Returning
+    /// `Fallback` asks the caller for the shared summarize-and-reseed path,
+    /// which every harness can take.
+    async fn compact(&self, _ctx: &CompactCtx) -> Result<CompactOutcome> {
+        Ok(CompactOutcome::Fallback)
     }
 
     /// The permission-mode / reasoning-level vocabulary this harness supports,
@@ -307,7 +344,7 @@ pub trait Harness: Send + Sync {
             model: model.filter(|model| self.id() == "opencode" && model.starts_with("orx-local-")),
             ..title::title_request(&prompt)
         };
-        let raw = self.one_shot(request).await?;
+        let raw = self.one_shot(request).await.ok()?;
         title::sanitize_title(&raw)
     }
 
@@ -315,9 +352,9 @@ pub trait Harness: Send + Sync {
     /// [`OneShotQuality`] and return the model's reply verbatim. The child
     /// cannot write or reach MCP servers (tools are disabled where the CLI
     /// allows), and nothing is recorded in the harness's own session store.
-    /// `None` = can't or failed.
-    async fn one_shot(&self, _request: OneShot<'_>) -> Option<String> {
-        None
+    /// The error says why it couldn't run or failed, in the CLI's own words where it gave any.
+    async fn one_shot(&self, _request: OneShot<'_>) -> Result<String> {
+        Err(anyhow!("{} cannot run one-shot requests", self.name()))
     }
 
     /// Whether `one_shot` runs on `OneShot::model`; callers caching by model
@@ -507,6 +544,25 @@ pub struct OneShot<'a> {
     pub timeout: Duration,
 }
 
+/// A failed one-shot child's message from the first of `outputs` it wrote to,
+/// on one line so a dumped model catalog stays readable in the log.
+pub(crate) fn one_shot_exit_error(status: std::process::ExitStatus, outputs: &[&[u8]]) -> Error {
+    outputs
+        .iter()
+        .map(|bytes| one_line(&String::from_utf8_lossy(bytes), 300))
+        .find(|text| !text.is_empty())
+        .map_or_else(|| anyhow!("{status}"), |text| anyhow!("{text}"))
+}
+
+/// `text` with its whitespace collapsed, capped at `max_chars`.
+pub(crate) fn one_line(text: &str, max_chars: usize) -> String {
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    match flat.char_indices().nth(max_chars) {
+        Some((end, _)) => format!("{}…", &flat[..end]),
+        None => flat,
+    }
+}
+
 /// How much model to spend on a one-shot: `Cheap` is the smallest/fastest
 /// configuration (titles), `Standard` a mid-tier model at modest effort
 /// (anything that has to read and reason about a project). Each harness maps
@@ -515,6 +571,32 @@ pub struct OneShot<'a> {
 pub enum OneShotQuality {
     Cheap,
     Standard,
+}
+
+/// The transcript a compaction summarizes: the same snapshot a lost native
+/// session is reseeded with, but for a session with no turn in flight — and so
+/// the same newest-`RECOVERY_SNAPSHOT_BYTES` cap, which on the reseed path is
+/// all the agent keeps of a long chat, and the same every-branch scope rather
+/// than the active path alone.
+pub(crate) fn compaction_snapshot(session_id: &str) -> String {
+    native_recovery_snapshot(session_id, "")
+}
+
+/// What a session needs to compact, without the machinery of a live turn.
+pub struct CompactCtx {
+    pub host: Arc<crate::local::chat::ChatHost>,
+    pub session_id: String,
+    pub native_session_id: Option<String>,
+    pub model: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum CompactOutcome {
+    /// The harness compacted its own context; the session id still resolves.
+    Native,
+    /// The harness has no compaction of its own to offer for this session —
+    /// summarize and reseed instead.
+    Fallback,
 }
 
 /// The chat-capable harness with this id, if any (used by chat dispatch).
@@ -529,8 +611,41 @@ pub fn is_chat_harness(id: &str) -> bool {
     registry().iter().any(|h| h.id() == id && h.supports_chat())
 }
 
-async fn detect_one(harness: &dyn Harness) -> Option<HarnessInfo> {
-    harness.detect().await.map(|mut info| {
+async fn detect_one(harness: &dyn Harness, snapshot: bool) -> Option<HarnessInfo> {
+    let timing = detect::detect_timing();
+    let start = std::time::Instant::now();
+    let detected = if snapshot {
+        harness.detect_snapshot().await
+    } else {
+        harness.detect().await
+    };
+    // The per-harness wall clock joins the fill's probe timings as the
+    // `"total"` row — the snapshot pass is covered by its own pass event.
+    if !snapshot {
+        detect::record_probe_timing(harness.id(), "total", start.elapsed().as_millis() as u64);
+    }
+    if timing {
+        eprintln!(
+            "orx detect: {} ({}): {}ms",
+            harness.id(),
+            if snapshot { "snapshot" } else { "full" },
+            start.elapsed().as_millis()
+        );
+    }
+    detected.map(|mut info| {
+        // A snapshot answer for an installed harness is provisional by
+        // definition: its install/auth evidence is file-based and the model
+        // catalog is a placeholder until the Full pass lands. Consumers
+        // outside onboarding (ModelPicker, ChatPanel, SettingsPage) read
+        // `agent_ready` without checking `catalog_pending`, so the
+        // pending ⇒ not-ready invariant lives here rather than at every call
+        // site — and `supports_steering` goes with it, since a steering claim
+        // is only meaningful once the CLI's readiness is verified.
+        if snapshot && (info.installed || info.catalog_pending) {
+            info.catalog_pending = true;
+            info.agent_ready = false;
+            info.supports_steering = false;
+        }
         if info.auth_state == HarnessAuthState::Unknown && info.agent_ready {
             info.auth_state = HarnessAuthState::Ready;
         }
@@ -547,17 +662,49 @@ pub async fn detect_harness(id: &str) -> Option<HarnessInfo> {
     let harness = registry()
         .into_iter()
         .find(|h| h.id() == id && h.supports_chat())?;
-    detect_one(harness.as_ref()).await
+    detect_one(harness.as_ref(), false).await
+}
+
+/// The snapshot pass of [`detect_harness`] (see [`Harness::detect_snapshot`]).
+pub async fn detect_harness_snapshot(id: &str) -> Option<HarnessInfo> {
+    detect_one(chat_harness(id)?.as_ref(), true).await
 }
 
 /// Detect every chat-capable harness, in registry order. This is what the
 /// `orx up` dashboard renders in its harness picker.
 pub async fn detect_harnesses() -> Vec<HarnessInfo> {
-    let harnesses: Vec<Box<dyn Harness>> = registry()
+    detect_all(false).await
+}
+
+/// The full pass, yielding each harness as its own probes finish instead of
+/// in a batch. Callers that can commit entries individually unblock a ready
+/// agent on its own clock rather than the slowest sibling's — the onboarding
+/// gate is per-entry (`agentReady && !catalogPending`), so the catalog fill
+/// should not be. Items carry the harness's registry index so the caller can
+/// restore registry order for the final payload.
+pub fn detect_harnesses_each() -> impl futures::Stream<Item = (usize, HarnessInfo)> {
+    registry()
         .into_iter()
         .filter(|h| h.supports_chat())
-        .collect();
-    let futures = harnesses.iter().map(|h| detect_one(h.as_ref()));
+        .enumerate()
+        .map(|(i, h)| async move { detect_one(h.as_ref(), false).await.map(|info| (i, info)) })
+        .collect::<futures::stream::FuturesUnordered<_>>()
+        .filter_map(std::future::ready)
+}
+
+/// The snapshot pass of [`detect_harnesses`]: readiness without the model
+/// catalogs, so a cold `/api/harnesses` answers in the time the *fastest*
+/// probes take instead of the slowest catalog. Entries that still owe a
+/// catalog carry `catalog_pending`.
+pub async fn detect_harnesses_snapshot() -> Vec<HarnessInfo> {
+    detect_all(true).await
+}
+
+async fn detect_all(snapshot: bool) -> Vec<HarnessInfo> {
+    let futures = registry()
+        .into_iter()
+        .filter(|h| h.supports_chat())
+        .map(|h| async move { detect_one(h.as_ref(), snapshot).await });
     futures::future::join_all(futures)
         .await
         .into_iter()
@@ -658,6 +805,16 @@ $ARGUMENTS
 mod tests {
     use super::options::{PlanActivation, REASONING_DEFAULT_ID};
     use super::*;
+
+    #[test]
+    fn one_line_flattens_and_caps_on_a_char_boundary() {
+        assert_eq!(
+            one_line("  Cannot use\n this   model. ", 300),
+            "Cannot use this model."
+        );
+        assert_eq!(one_line("ééééé", 3), "ééé…");
+        assert_eq!(one_line("abc", 3), "abc");
+    }
 
     fn options_for(id: &str) -> HarnessOptions {
         registry()

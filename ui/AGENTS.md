@@ -4,10 +4,10 @@ Vite + React SPA, embedded into `orx up` via committed `dist/`.
 
 ## Locales
 
-Canonical list is `project.inlang/settings.json`: **`en`**, **`zh-CN`**, **`fa`**, **`ar`**, **`es`**, **`hi`**. Catalogs live in `messages/{locale}.json`.
+Canonical list is `project.inlang/settings.json`: **`en`**, **`zh-CN`**, **`fa`**, **`ar`**, **`es`**, **`hi`**, **`ko`**, **`ja`**, **`pl`**. Catalogs live in `messages/{locale}.json`.
 
 - Every new string must exist in **all** of those files with the same placeholders.
-- Do not add a locale because upstream has it; do not skip one this fork already has.
+- Do not add a locale that is not in that list, and do not drop one that is.
 - `node scripts/check-i18n.mjs` (also `pnpm lint:i18n`) is the gate. Paraglide compile happens in `pnpm build` / CI (`pnpm exec paraglide-js compile`).
 
 ## Styles
@@ -40,6 +40,6 @@ Commit the regenerated `dist/` assets and rebuild the Rust binary to verify its 
 
 ## Do not
 
-- Touch only `en` / `zh-CN` / `fa` after Spanish, Hindi, and Arabic landed.
+- Touch only some catalogs. Every locale in `project.inlang/settings.json` gets the same keys.
 - Check in a `pnpm-lock.yaml` change without intending a dependency bump.
 - Serve the dashboard through ad-hoc Vite against production data; use `scripts/dev-slot.mjs` or `orx up`.

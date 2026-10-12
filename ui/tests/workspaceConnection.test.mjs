@@ -84,7 +84,7 @@ for (const kind of ["local", "ssh"]) {
         "./queries/client": {},
         "@tanstack/react-query": { useQuery: ({ kind }) => ({
           data: scenario === "loading" || scenario === "error" ? undefined
-            : kind === "projects" ? [] : { onboardingCompleted: scenario !== "onboarding" },
+            : kind === "projects" ? (scenario === "projects" ? [{ id: "p" }] : []) : { onboardingCompleted: scenario !== "onboarding" },
           error: scenario === "error" ? new Error("offline") : null,
         }) },
         "./queries/projects": { listProjectsQuery: () => ({ kind: "projects" }), getUiStateQuery: () => ({ kind: "state" }) },
@@ -97,6 +97,7 @@ for (const kind of ["local", "ssh"]) {
         "./components/OfflineBanner": { OfflineBanner: "OfflineBanner" },
         "./components/WorkspaceConnection": { WorkspaceConnection: "WorkspaceConnection" },
         "./components/UpdateBanner": { UpdateBanner: "UpdateBanner", useUpdateStatus: () => ({}) },
+        "./components/DesktopAppBanner": { DesktopAppBanner: "DesktopAppBanner" },
         "./components/ui": {},
       });
       const connection = nodes(ProjectsPage()).find((node) => node.type === "WorkspaceConnection");
@@ -119,7 +120,7 @@ for (const outcome of ["success", "failure", "popup-blocked"]) {
       react: state.react,
       "react-dom": { createPortal: (tree) => tree },
       "@tanstack/react-query": {
-        useQuery: ({ kind }) => ({ data: kind === "hosts" ? [{ host: "research" }] : [] }),
+        useQuery: ({ kind }) => ({ data: kind === "hosts" ? { hosts: [{ host: "research" }], defaultHost: null } : [] }),
         useMutation: () => ({ mutateAsync: async (args) => {
           calls.push(["connect", ...args]);
           if (outcome === "failure") throw new Error("connection failed");
@@ -129,7 +130,7 @@ for (const outcome of ["success", "failure", "popup-blocked"]) {
       "lucide-react": { SlidersHorizontal: "Icon", X: "Icon" },
       "../api": {}, "../paraglide/messages.js": messages,
       "../paraglide/runtime.js": { getLocale: () => "en" },
-      "../queries/settings": { getSshHostsQuery: () => ({ kind: "hosts" }), listRemoteSessionsQuery: () => ({ kind: "sessions" }) },
+      "../queries/settings": { getSshSettingsQuery: () => ({ kind: "hosts" }), listRemoteSessionsQuery: () => ({ kind: "sessions" }) },
       "../theme": { getThemePreference: () => "dark" },
       "./useDialogFocus": { useDialogFocus: () => {} },
       "./ui": {

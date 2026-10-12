@@ -7,7 +7,9 @@
 //! Experiment and run identifiers resolve only when their records belong to a
 //! project registered in the local store.
 
+pub mod agent_lifecycle;
 pub mod agent_skills;
+pub mod autonomy;
 pub mod bash;
 pub mod browser_cookies;
 pub mod chat;
@@ -29,11 +31,13 @@ pub mod local_models;
 pub mod localrun;
 pub mod modal;
 pub mod model;
+pub mod native_chats;
 pub mod native_store;
 pub mod opencode;
 pub mod openresearch;
 pub mod overleaf;
 pub mod overleaf_live;
+pub mod portable_git;
 pub mod projects;
 pub mod ray;
 pub mod resolve;

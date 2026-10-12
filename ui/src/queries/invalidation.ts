@@ -27,7 +27,7 @@ export function invalidateFamilies(families: readonly string[], scope = workspac
 
 const fileBodies = ["resolvedFile", "getProjectFile", "getArtifactFileText", "getArtifactFileMetadata"];
 export const artifactFamilies = ["getArtifacts", "getArtifactFileText", "getArtifactFileMetadata"];
-export const liveFamilies = ["listProjects", "listProjectActivity", "listExperiments", "listHypotheses", "listRuns", "listChatSessions", "listChatAttachments", "getChatMessages", "getHarnesses", "getUpdateStatus", ...artifactFamilies, ...fileBodies, "getAbsoluteFile", "fileVersion", "getCodeTree", "getSessionWorktree", "getRunDiff", "getExperimentDiff"];
+export const liveFamilies = ["listProjects", "listProjectActivity", "listSidebarChatSessions", "listExperiments", "listHypotheses", "listRuns", "listChatSessions", "listChatAttachments", "getChatMessages", "getHarnesses", "getUpdateStatus", ...artifactFamilies, ...fileBodies, "getAbsoluteFile", "fileVersion", "getCodeTree", "getSessionWorktree", "getRunDiff", "getExperimentDiff"];
 
 export function invalidateProjectFiles(projectId: string, scope = workspaceScope(), cancelReads = false) {
   const sessions = queryClient.getQueryData<ChatSession[]>([...scope, "listChatSessions", projectId]) ?? [];
@@ -67,7 +67,7 @@ const settingsFamilies: Record<string, readonly string[]> = {
   ray: ["getRaySettings", "getComputeSettings"],
   env: ["getEnvVars", "getHfSettings", "getTinkerSettings", "getModalSettings", "getSlurmSettings", "getRaySettings", "getK8sSettings", "getOpenResearchSettings", "getComputeSettings", "getHarnesses"],
   "data-dir": ["getDataDir"],
-  ssh: ["getSshHosts", "getSshConfig", "getSshMasterStatus", "getComputeSettings"],
+  ssh: ["getSshSettings", "getSshConfig", "getSshMasterStatus", "getComputeSettings"],
   compute: ["getComputeSettings"],
   git: ["githubAccount", "repoAccess", "getProjectGitStatus"],
   profile: ["getProfile"],
@@ -80,7 +80,7 @@ export function invalidateWrite(url: string, scope: ReturnType<typeof workspaceS
   if (!isCurrentScope(scope)) return;
   const invalidate = (families: readonly string[], target = scope, predicate?: QueryFilters["predicate"]) => invalidateFamilies(families, target, predicate, true);
   const path = url.split("?")[0];
-  if (/\/(ui-state|open|prewarm|validate|preflight)$/.test(path)) return;
+  if (/\/(ui-state|open|reveal|prewarm|validate|preflight)$/.test(path)) return;
   const setting = /^\/api\/settings\/([^/]+)/.exec(path)?.[1];
   if (setting) { invalidate(settingsFamilies[setting] ?? [], scope); return; }
   if (path.startsWith("/api/local-models") && !/\/(discover|check)$/.test(path)) { invalidate(["getLocalModels", "getHarnesses"], scope); return; }
@@ -94,6 +94,7 @@ export function invalidateWrite(url: string, scope: ReturnType<typeof workspaceS
     return;
   }
   if (path.startsWith("/api/chat/")) {
+    invalidate(["listSidebarChatSessions"], scope);
     if (path === "/api/chat/sessions") invalidate(["getProjectStarterPrompts", "listProjectActivity"], scope);
     return;
   }
@@ -101,7 +102,7 @@ export function invalidateWrite(url: string, scope: ReturnType<typeof workspaceS
   if (project) {
     const [, projectId, action] = project;
     if (action.startsWith("/file")) { invalidateProjectFiles(projectId, scope, true); return; }
-    invalidate(["listProjects", "listProjectActivity"], scope);
+    invalidate(["listProjects", "listProjectActivity", "listSidebarChatSessions"], scope);
     invalidate(["getProjectGitStatus", "getCodeTree", "getProjectStarterPrompts"], scope, (query) => query.queryKey[3] === projectId);
     return;
   }
