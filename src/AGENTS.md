@@ -9,7 +9,7 @@ Binary name `orx` (`src/main.rs`). Crate name `openresearch-cli`.
 | `commands/` | CLI subcommands and `orx up` HTTP. See [`commands/AGENTS.md`](commands/AGENTS.md). |
 | `local/` | Local store, artifacts FS, harnesses, demo, playbook. See [`local/AGENTS.md`](local/AGENTS.md). |
 | `jobs/` | Compute backends orx launches itself (SSH, Slurm, HF, Modal, K8s, Ray, Tinker, local). |
-| `client.rs` | Hosted API client (orgs, instances, managed compute) and literature services (alphaXiv, arXiv, OpenAlex). |
+| `client.rs` | Hosted API client (orgs, instances, managed compute) and literature services (alphaXiv, OpenAlex, bioRxiv, PubMed). |
 | `store.rs` | SQLite + run-log paths. Data dir: `$ORX_DATA_DIR`, else settings, else XDG/`~/.local/share/openresearch`. |
 | `telemetry.rs` | Opt-out analytics. Source builds must stay `development` channel and must not send production telemetry. |
 | `compute.rs`, `plane/`, `remote.rs` | Remote/runtime wiring. |

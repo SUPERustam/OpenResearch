@@ -6,7 +6,7 @@
 
 This GitHub repo (`SUPERustam/OpenResearch`) is a fork of [`alphaXiv/OpenResearch`](https://github.com/alphaXiv/OpenResearch). Treat it as a **drop-in replacement for OpenResearch**: port and stay compatible with upstream behavior; do not invent fork-only product surfaces unless asked. Package version stays put unless someone is cutting a release.
 
-Self-update does **not** follow upstream. `orx update`, background auto-update, the macOS app manifest, remote installs, and cargo-dist releases all come from this fork (`REPO_URL` in `src/updates.rs`, `repository` in `Cargo.toml`). `build.rs` may also accept an alphaXiv Actions run for the production channel; that does not change the download URL. Literature search still uses alphaXiv.
+Self-update does **not** follow upstream. `orx update`, background auto-update, the macOS app manifest, remote installs, and cargo-dist releases all come from this fork (`REPO_URL` in `src/updates.rs`, `repository` in `Cargo.toml`). `build.rs` may also accept an alphaXiv Actions run for the production channel; that does not change the download URL. Literature search still uses alphaXiv. The sidebar, wordmark, document title, and footer say CoHyp.
 
 `openresearch.sh` is the companion service. It owns the website and documentation, accounts and organizations, sandbox provisioning, and managed-compute catalogs. Research projects, experiments, runs, logs, and artifacts remain local to `orx`.
 
@@ -23,7 +23,7 @@ Read this guide and each nested guide along the path you are editing. Paths belo
 | [`src/AGENTS.md`](src/AGENTS.md) | Rust crate layout, local vs hosted API |
 | [`src/commands/AGENTS.md`](src/commands/AGENTS.md) | CLI subcommands and `orx up` HTTP |
 | [`src/local/AGENTS.md`](src/local/AGENTS.md) | SQLite store, artifacts FS, demo seed, playbook |
-| [`src/local/harness/AGENTS.md`](src/local/harness/AGENTS.md) | Claude / Codex / OpenCode / Cursor adapters |
+| [`src/local/harness/AGENTS.md`](src/local/harness/AGENTS.md) | Claude / Codex / OpenCode / Cursor / Antigravity adapters |
 | [`scripts/AGENTS.md`](scripts/AGENTS.md) | Isolated `dev-slot` and OpenCode compat helpers |
 | [`agent-skills/AGENTS.md`](agent-skills/AGENTS.md) | Bundled research-agent skills and artifact layout |
 | [`demo/AGENTS.md`](demo/AGENTS.md) | Embedded nanochat demo project |

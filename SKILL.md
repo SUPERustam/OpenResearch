@@ -131,6 +131,7 @@ The detail lives in focused modules — load one with `orx skill <name>` (the bu
 list, with one-line descriptions, is printed at the end of `orx skill` output):
 
 - **orx-experiment-tree** — the experiment-tree model, the auto-research loop, and `orx exp desc`.
+- **orx-hypothesis-tree** — claims, internet sources, and the experiments that test them. A hypothesis has no git branch and no run command (`orx hypothesis`).
 - **orx-create** — initialize a local project and add local experiment nodes.
 - **orx-compute** — launch and monitor runs; after resolving the backend, read its bundled reference.
 - **orx-instances** — create persistent standalone machines for manual work.
