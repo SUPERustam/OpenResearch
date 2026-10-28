@@ -61,7 +61,7 @@ DESKTOP_ASSETS = (
 
 def downloads(assets=()):
     urls = {asset["name"]: asset["browser_download_url"] for asset in assets}
-    images = "https://raw.githubusercontent.com/alphaXiv/OpenResearch/main/.github/readme-assets"
+    images = "https://raw.githubusercontent.com/SUPERustam/OpenResearch/main/.github/readme-assets"
     buttons = [
         f'<a href="{escape(urls[name], quote=True)}"><picture>'
         f'<source media="(prefers-color-scheme: dark)" srcset="{images}/download-{platform}-dark.svg">'
@@ -74,7 +74,7 @@ def downloads(assets=()):
         links = ["[Download the desktop app](https://openresearch.sh/)"]
     return "\n\n".join((
         DOWNLOAD_START,
-        "## Download OpenResearch",
+        "## Download CoHyp",
         "Install the desktop app to get everything you need. No separate installation or terminal setup required.",
         "\n\n".join(links),
         "The desktop app updates automatically by default. You can manage updates in Settings.",

@@ -2,17 +2,25 @@
 
 Authoritative PR checks: `workflows/ci.yml`.
 
-Ubuntu checks localization, styles, dev-slot tests, UI typecheck/unit tests, and Rust fmt/clippy/build/test. It builds both debug and release binaries and verifies both report the `development` channel. It also runs `vite build` and fails if committed `ui/dist` differs. CI uses Node 22 and pnpm 10; exact commands and ordering live in `workflows/ci.yml`.
+`Select checks` reads the diff and turns jobs on. A workflow, action, or `scripts/ci-*` change runs every job. Docs-only changes do not. Exact commands live in `workflows/ci.yml`.
 
-`linux app` packages the desktop AppImage (`desktop` feature) on Ubuntu 22.04 for x86_64 and aarch64.
+`Frontend` checks localization and style tokens, installs UI dependencies with Node 22 and pnpm 10, runs `vite build`, typecheck, and `ui/tests/*.test.mjs`. It does not rewrite committed `ui/dist`. UI changes still need a local `pnpm build` in the PR.
 
-Windows runs clippy/build/test without Node (`ui/dist` is committed), plus release executable and desktop-installer uploads outside reusable release calls. UI changes must include a local `pnpm build`; CI does not commit a regenerated `ui/dist`.
+`Helper tests` runs the dev-slot, chart, embedded JavaScript, and release-notes suites that the diff selects.
+
+`Rust` runs the SSH helper protocol tests, fmt (including `windows/launcher`), clippy, and `cargo test --locked`. Pull requests skip the two long supervisor tests named in the workflow. A debug build must report the `development` channel. The release build and its channel check run only when CI is called for a release.
+
+`linux app` lints and builds `--features desktop` on Ubuntu 22.04 (x86_64 and aarch64). It does not package the AppImage; that stays in `release-linux-app.yml`.
+
+`windows` lints the crate and `windows/launcher`, then runs `cargo test --locked`. Pull requests split lint and test. Desktop installers are attached by the release app workflows, not by this job.
+
+The `fmt, clippy, test` job only checks that every selected job passed.
 
 ## Rules that GitHub settings must keep
 
 - Required checks: `fmt, clippy, test`, `version sanity`, and `linked issue`, including for administrators. `linked issue` is `workflows/linked-issue.yml` (`pull_request_target`; it must not check out PR code). Fork PRs must link an issue in this repository. Branches in this repository are exempt.
 - No merge queue. Do not require branches to be up to date.
-- `pull_request` CI must test the merge ref (`actions/checkout` default), not the PR head alone.
+- `pull_request` CI must test the merge ref. Jobs check out `github.sha`, which for `pull_request` is that merge commit, not the PR head alone. Release calls pass `source-sha` instead.
 
 These are required policies, not proof of live GitHub settings. CI also runs on `main`; new commits on `main` do not automatically rerun every open PR's merge candidate.
 
