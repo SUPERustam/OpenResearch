@@ -54,6 +54,8 @@ for (const corner of [true, false]) {
       "./RemoteStatus": { RemoteStatus: "RemoteStatus" },
       "./RemoteIcon": { RemoteIcon: "RemoteIcon" },
       "./SshConfigDialog": { SshConfigDialog: "ConfigDialog" },
+      "./Wordmark": { BrandMark: "BrandMark" },
+      "./UpdateBanner": { useUpdateStatus: () => ({ status: null }) },
       "./ui": { Button: "button", IconButton: "button" },
     });
     const runtime = { kind: "local", version: "test" };
@@ -76,7 +78,7 @@ for (const corner of [true, false]) {
 }
 
 for (const kind of ["local", "ssh"]) {
-  for (const scenario of ["loading", "error", "onboarding", "projects"]) {
+  for (const scenario of ["loading", "error", "onboarding", "no-projects", "projects"]) {
     test(`${kind} project home connection control during ${scenario}`, () => {
       const runtime = { kind, version: "test" };
       const { ProjectsPage } = load("routePages.tsx", {
@@ -84,23 +86,27 @@ for (const kind of ["local", "ssh"]) {
         "./queries/client": {},
         "@tanstack/react-query": { useQuery: ({ kind }) => ({
           data: scenario === "loading" || scenario === "error" ? undefined
-            : kind === "projects" ? [] : { onboardingCompleted: scenario !== "onboarding" },
+            : kind === "projects" ? (scenario === "projects" ? [{ id: "p" }] : []) : { onboardingCompleted: scenario !== "onboarding" },
           error: scenario === "error" ? new Error("offline") : null,
         }) },
         "./queries/projects": { listProjectsQuery: () => ({ kind: "projects" }), getUiStateQuery: () => ({ kind: "state" }) },
-        "@tanstack/react-router": { useNavigate: () => () => {} },
+        "@tanstack/react-router": { useNavigate: () => () => {}, useRouteContext: () => ({ queryClient: {} }) },
         "./RemoteRuntime": { useRuntime: () => runtime },
         "./demoSessionState": {}, "./routeResume": {}, "./workspacePersistence": {}, "./panelLayout": {},
         "./paraglide/messages.js": messages,
         "./components/Onboarding": { Onboarding: "Onboarding" },
-        "./components/ProjectsHome": { ProjectsHome: "ProjectsHome" },
+        "./components/ProjectsHome": { ProjectsHome: "ProjectsHome", ProjectsEmptyState: "ProjectsEmptyState" },
         "./components/OfflineBanner": { OfflineBanner: "OfflineBanner" },
         "./components/WorkspaceConnection": { WorkspaceConnection: "WorkspaceConnection" },
         "./components/UpdateBanner": { UpdateBanner: "UpdateBanner", useUpdateStatus: () => ({}) },
+        "./components/DesktopAppBanner": { DesktopAppBanner: "DesktopAppBanner" },
         "./components/ui": {},
       });
       const connection = nodes(ProjectsPage()).find((node) => node.type === "WorkspaceConnection");
-      if (kind === "local" && scenario !== "projects") {
+      // The local corner belongs to the project home: it stays away while the
+      // first-run walkthrough runs and before the state has loaded.
+      const expected = kind === "ssh" || !["loading", "error", "onboarding"].includes(scenario);
+      if (!expected) {
         assert.equal(connection, undefined);
         return;
       }
@@ -119,7 +125,7 @@ for (const outcome of ["success", "failure", "popup-blocked"]) {
       react: state.react,
       "react-dom": { createPortal: (tree) => tree },
       "@tanstack/react-query": {
-        useQuery: ({ kind }) => ({ data: kind === "hosts" ? [{ host: "research" }] : [] }),
+        useQuery: ({ kind }) => ({ data: kind === "hosts" ? { hosts: [{ host: "research" }], defaultHost: null } : [] }),
         useMutation: () => ({ mutateAsync: async (args) => {
           calls.push(["connect", ...args]);
           if (outcome === "failure") throw new Error("connection failed");
@@ -129,7 +135,7 @@ for (const outcome of ["success", "failure", "popup-blocked"]) {
       "lucide-react": { SlidersHorizontal: "Icon", X: "Icon" },
       "../api": {}, "../paraglide/messages.js": messages,
       "../paraglide/runtime.js": { getLocale: () => "en" },
-      "../queries/settings": { getSshHostsQuery: () => ({ kind: "hosts" }), listRemoteSessionsQuery: () => ({ kind: "sessions" }) },
+      "../queries/settings": { getSshSettingsQuery: () => ({ kind: "hosts" }), listRemoteSessionsQuery: () => ({ kind: "sessions" }) },
       "../theme": { getThemePreference: () => "dark" },
       "./useDialogFocus": { useDialogFocus: () => {} },
       "./ui": {

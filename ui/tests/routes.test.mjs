@@ -34,6 +34,7 @@ function loadModule(filename, api = {}, remembered = null) {
       if (id === "../App") return { default: () => null };
       if (id === "../RemoteRuntime") return { RuntimeRoot: () => null, useRuntime: () => ({ kind: "local" }) };
       if (id === "../routePages") return { ResumeGlobal: () => null, ResumeProject: () => null, ProjectsPage: () => null };
+      if (id === "../components/ReproducePage") return { ReproducePage: () => null };
       if (id.startsWith("./routes/")) return load(new URL(`${id}.tsx`, url));
       throw new Error(`Unexpected dependency: ${id}`);
     }, exports);
@@ -57,16 +58,33 @@ test("real file routes distinguish task/new, task IDs, project index, and settin
     ["/projects/p/tasks/new", "/projects/$projectId/tasks/new"],
     ["/projects/p/tasks/old", "/projects/$projectId/tasks/$sessionId"],
     ["/projects/p/skills", "/projects/$projectId/skills"],
-    ["/projects/p/settings/git", "/projects/$projectId/settings/$tab"],
+    ["/projects/p/settings/settings", "/projects/$projectId/settings/$tab"],
     ["/remote-launch", "/remote-launch"],
   ]) {
     const router = await match(path);
     assert.equal(router.state.matches.at(-1).routeId, routeId, path);
     assert.equal(router.state.matches.at(-1).status, "success", path);
   }
-  for (const path of ["/projects/p/settings/unknown", "/projects/p/tasks/%00"]) {
+  for (const path of ["/projects/p/settings/git", "/projects/p/settings/unknown", "/projects/p/tasks/%00"]) {
     const invalid = await match(path);
     assert(invalid.state.matches.some((route) => route.status === "notFound"), path);
+  }
+});
+
+test("reproduce links carry arXiv and alphaXiv-exclusive ids through the path exactly", async () => {
+  const { linkedPaperId } = loadModule("routes/reproduce.$.tsx");
+  for (const [path, id] of [
+    ["/reproduce/2401.10000", "2401.10000"],
+    ["/reproduce/1706.03762v2", "1706.03762v2"],
+    ["/reproduce/hep-th/9901001", "hep-th/9901001"],
+    ["/reproduce/2610.learning-spectrum-matched-shellsort", "2610.learning-spectrum-matched-shellsort"],
+    ["/reproduce/a/b/c", null],
+    ["/reproduce/a%20b", null],
+  ]) {
+    const router = await match(path);
+    const leaf = router.state.matches.at(-1);
+    assert.equal(leaf.routeId, "/reproduce/$", path);
+    assert.equal(linkedPaperId(leaf.params._splat), id, path);
   }
 });
 
@@ -96,15 +114,15 @@ function resumeApi(lastLocation, sessions = [], projects = [{ id: "p" }], tasks 
   };
 }
 
-test("global resume preserves settings and archived task links, and terminates stale redirects at home", async () => {
+test("global resume preserves settings and archived task links, and falls back to an available project for stale redirects", async () => {
   for (const [location, sessions, expected] of [
     ["/projects/p/settings/storage", [], "/projects/p/settings/storage"],
     ["/projects/p/tasks/old", [{ id: "old", projectId: "p", archived: true }], "/projects/p/tasks/old"],
-    ["/projects/p/tasks/deleted", [], "/projects"],
-    ["/projects/deleted/tasks/new", [], "/projects"],
-    ["/projects/p", [], "/projects"],
-    ["//elsewhere.test", [], "/projects"],
-    [null, [], "/projects"],
+    ["/projects/p/tasks/deleted", [], "/projects/p/tasks/new"],
+    ["/projects/deleted/tasks/new", [], "/projects/p/tasks/new"],
+    ["/projects/p", [], "/projects/p/tasks/new"],
+    ["//elsewhere.test", [], "/projects/p/tasks/new"],
+    [null, [], "/projects/p/tasks/new"],
   ]) {
     const { globalResumeLocation } = loadModule("routeResume.ts", resumeApi(location, sessions));
     assert.equal(await globalResumeLocation(), expected);
@@ -128,7 +146,7 @@ test("resume uses the current database response and current queued preference; f
   const current = loadModule("routeResume.ts", api, { lastLocation: "/projects/p/skills" });
   assert.equal(await current.globalResumeLocation(), "/projects/p/skills");
   const otherDatabase = loadModule("routeResume.ts", resumeApi(saved, [], [{ id: "other" }]));
-  assert.equal(await otherDatabase.globalResumeLocation(), "/projects");
+  assert.equal(await otherDatabase.globalResumeLocation(), "/projects/other/tasks/new");
   const failed = loadModule("routeResume.ts", {
     ...api,
     getUiState: async () => { throw new Error("offline"); },
@@ -191,7 +209,7 @@ for (const projectId of [undefined, "p"]) {
         cleanup();
         const finish = setup();
         await new Promise(resolve => setImmediate(resolve));
-        assert.equal(navigated, projectId ? "/projects/p/tasks/new" : "/projects");
+        assert.equal(navigated, "/projects/p/tasks/new");
         finish();
       } else assert.equal(navigated, undefined);
       client.clear();

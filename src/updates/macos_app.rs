@@ -23,9 +23,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use semver::Version;
-use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
+use super::SingleAssetManifest;
 use crate::error::{anyhow, Result};
 
 /// Release asset describing the published app build. Written by
@@ -48,44 +48,35 @@ fn signing_requirement() -> String {
     )
 }
 
-#[derive(Debug, Deserialize)]
-pub struct AppManifest {
-    pub version: String,
-    /// Release tag the asset is pinned to, so the download can't drift to a
-    /// different release between the manifest fetch and the download.
-    pub tag: String,
-    pub asset: String,
-    pub sha256: String,
-}
-
-/// Fetches the published app manifest. `Ok(None)` for a 404 — the expected state
-/// between a release being published and its DMG being attached. That is
-/// "nothing to update to yet", never an error the user should see.
-pub async fn fetch_manifest(timeout: Duration) -> Result<Option<AppManifest>> {
-    let url = format!(
-        "{}/releases/latest/download/{}",
-        super::REPO_URL,
-        MANIFEST_ASSET
-    );
-    let res = super::http()
-        .get(&url)
-        .header("user-agent", super::UA)
-        .timeout(timeout)
-        .send()
-        .await
-        .map_err(|e| anyhow!("Could not fetch the macOS app manifest: {}", e))?;
-    if res.status() == reqwest::StatusCode::NOT_FOUND {
-        return Ok(None);
+/// Fetches the published app manifest; `Ok(None)` until the DMG is attached.
+pub async fn fetch_manifest(timeout: Duration) -> Result<Option<SingleAssetManifest>> {
+    if crate::telemetry::update_channel() == super::ReleaseChannel::Canary {
+        return Ok(super::fetch_canary_manifest(timeout)
+            .await?
+            .and_then(|mut manifest| {
+                manifest
+                    .assets
+                    .remove("macos")
+                    .map(|asset| SingleAssetManifest {
+                        version: manifest.version,
+                        tag: manifest.tag,
+                        asset: asset.asset,
+                        sha256: asset.sha256,
+                        ancestors: manifest.ancestors,
+                    })
+            }));
     }
-    let status = res.status();
-    if !status.is_success() {
+    let manifest: Option<SingleAssetManifest> =
+        super::fetch_app_manifest(MANIFEST_ASSET, timeout).await?;
+    if manifest
+        .as_ref()
+        .is_some_and(|manifest| !super::valid_desktop_tag(&manifest.tag))
+    {
         return Err(anyhow!(
-            "App manifest request failed ({} {})",
-            status.as_u16(),
-            status.canonical_reason().unwrap_or("")
+            "The app update belongs to a different release channel."
         ));
     }
-    Ok(Some(serde_json::from_str(&res.text().await?)?))
+    Ok(manifest)
 }
 
 /// Update the installed bundle at `root` in place.
@@ -106,13 +97,31 @@ pub async fn update(root: &Path, current: &Version, dry_run: bool, background: b
 
     // Keep the cache honest even when this install can't apply the update: it is
     // what the dashboard and the outdated warning read.
-    if let Some(latest) = &latest {
-        super::write_check_cache(&latest.to_string());
+    if let (Some(manifest), Some(latest)) = (&published, &latest) {
+        let compatible = super::release_is_compatible(
+            &manifest.tag,
+            &manifest.ancestors,
+            Duration::from_secs(10),
+        )
+        .await?;
+        super::record_checked_release(&super::LatestRelease {
+            version: latest.clone(),
+            tag: manifest.tag.clone(),
+            compatible,
+            #[cfg(windows)]
+            canary_asset: None,
+        });
+        if !compatible {
+            if !background {
+                println!("{}", super::compatibility_wait_message(&manifest.tag));
+            }
+            return Ok(());
+        }
     }
 
     let Some((manifest, latest)) = published
         .zip(latest)
-        .filter(|(_, latest)| super::is_outdated(current, latest))
+        .filter(|(manifest, latest)| super::release_available(current, latest, &manifest.tag))
     else {
         if !background {
             println!("OpenResearch {} is up to date.", current);
@@ -159,7 +168,7 @@ pub async fn update(root: &Path, current: &Version, dry_run: bool, background: b
     let _ = std::fs::remove_dir_all(&staging);
     swapped?;
 
-    super::record_installed(&latest.to_string());
+    super::record_installed(&latest.to_string(), &manifest.tag);
     if !background {
         println!("✓ Updated OpenResearch {} → {}.", current, latest);
         println!("Restart the app to run the new version.");
@@ -229,7 +238,7 @@ async fn team_id(root: &Path) -> Option<String> {
 
 /// Download the DMG, verify it, and copy the app out into `staging`. Returns the
 /// staged bundle's path.
-async fn stage_verified_app(manifest: &AppManifest, staging: &Path) -> Result<PathBuf> {
+async fn stage_verified_app(manifest: &SingleAssetManifest, staging: &Path) -> Result<PathBuf> {
     let dmg_bytes = super::fetch_release_asset(
         &manifest.tag,
         &manifest.asset,
@@ -358,13 +367,14 @@ fn swap_bundle(root: &Path, staged: &Path) -> Result<()> {
 }
 
 /// Remove staging, backup, and probe litter an interrupted update left next to
-/// the bundle. Matches only our own `.`-prefixed names, so the live bundle and
-/// anything else in `/Applications` are never candidates.
+/// the app (the macOS bundle, or the Linux AppImage). Matches only our own
+/// `.`-prefixed names, so the live app and anything else beside it are never
+/// candidates.
 ///
-/// The age floor keeps this off a *concurrent* updater's staging directory: the
-/// lock lives under `config_dir()`, so two user accounts sharing one
-/// `/Applications` are not serialized against each other.
-fn sweep_leftovers(parent: &Path, root: &Path) {
+/// The age floor keeps this off a *concurrent* updater's staging: the lock
+/// lives under `config_dir()`, so two user accounts sharing one folder are not
+/// serialized against each other.
+pub(super) fn sweep_leftovers(parent: &Path, root: &Path) {
     const MIN_AGE: Duration = Duration::from_secs(60 * 60);
     let bundle = root.file_name().unwrap_or_default().to_string_lossy();
     let Ok(entries) = std::fs::read_dir(parent) else {

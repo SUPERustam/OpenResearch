@@ -41,7 +41,7 @@ pub struct AgentSkill {
     pub resources: &'static [AgentSkillResource],
 }
 
-pub const RETIRED_SKILL_NAMES: &[&str] = &["orx-lit", "orx-compute-k8s"];
+pub const RETIRED_SKILL_NAMES: &[&str] = &["orx-lit", "orx-compute-k8s", "orx-evidence"];
 
 /// Which module set to serve. Both sets use the same canonical module bodies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,6 +56,10 @@ pub enum SkillSet {
 
 const COMPUTE: &str = include_str!("../../agent-skills/orx-compute/SKILL.md");
 const COMPUTE_RESOURCES: &[AgentSkillResource] = &[
+    AgentSkillResource {
+        path: "references/configuration.md",
+        content: include_str!("../../agent-skills/orx-compute/references/configuration.md"),
+    },
     AgentSkillResource {
         path: "references/hf.md",
         content: include_str!("../../agent-skills/orx-compute/references/hf.md"),
@@ -100,12 +104,22 @@ const AGENT_DELEGATION: &str = include_str!("../../agent-skills/orx-agent-delega
 const LIT: &str = include_str!("../../agent-skills/orx-lit-review/SKILL.md");
 const CREATE: &str = include_str!("../../agent-skills/orx-create/SKILL.md");
 const REPORTS: &str = include_str!("../../agent-skills/orx-reports/SKILL.md");
-const EVIDENCE: &str = include_str!("../../agent-skills/orx-evidence/SKILL.md");
+const LOGS: &str = include_str!("../../agent-skills/orx-logs/SKILL.md");
+const RESULTS: &str = include_str!("../../agent-skills/orx-results/SKILL.md");
 const CUSTOMIZE: &str = include_str!("../../agent-skills/orx-customize/SKILL.md");
 const PAPER: &str = include_str!("../../agent-skills/orx-paper/SKILL.md");
 const INSTANCES: &str = include_str!("../../agent-skills/orx-instances/SKILL.md");
+const FEEDBACK: &str = include_str!("../../agent-skills/orx-feedback/SKILL.md");
 const FIGURES: &str = include_str!("../../agent-skills/orx-figures/SKILL.md");
 const FIGURES_RESOURCES: &[AgentSkillResource] = &[
+    AgentSkillResource {
+        path: "assets/orx-chart.html",
+        content: include_str!("../../agent-skills/orx-figures/assets/orx-chart.html"),
+    },
+    AgentSkillResource {
+        path: "assets/orx_chart.py",
+        content: include_str!("../../agent-skills/orx-figures/assets/orx_chart.py"),
+    },
     AgentSkillResource {
         path: "references/curves.md",
         content: include_str!("../../agent-skills/orx-figures/references/curves.md"),
@@ -176,13 +190,13 @@ const S_GIT: AgentSkill = AgentSkill {
 };
 const S_AGENT_DELEGATION: AgentSkill = AgentSkill {
     name: "orx-agent-delegation",
-    description: "Delegate independent work to helper agent sessions with `orx agent spawn`: task selection, self-contained briefs, branch ownership, compute authorization, wakeups, and nesting or concurrency constraints. Use before spawning a helper or interpreting its result; do not delegate the literature retrieval loop.",
+    description: "Create independent project chats with `orx agent spawn` using the user's New Chat settings. Covers standalone opening messages, project selection, worktrees, and compute authorization. Use before creating another chat.",
     content: AGENT_DELEGATION,
     resources: &[],
 };
 const S_LIT: AgentSkill = AgentSkill {
     name: "orx-lit-review",
-    description: "Explain and compare scientific or technical concepts using original research evidence. Use before answering conceptual or architectural questions, research claims, literature reviews, or related-work requests, even when no paper, citation, or search is requested. Retrieve with relevant alphaXiv, OpenAlex, and bioRxiv connectors; scale retrieval to the question.",
+    description: "Explain and compare scientific or technical concepts using original research evidence. Use before answering conceptual or architectural questions, research claims, literature reviews, or related-work requests, even when no paper, citation, or search is requested. Retrieve with relevant alphaXiv, OpenAlex, bioRxiv, and PubMed connectors; scale retrieval to the question.",
     content: LIT,
     resources: &[],
 };
@@ -194,7 +208,7 @@ const S_CREATE: AgentSkill = AgentSkill {
 };
 const S_REPORTS: AgentSkill = AgentSkill {
     name: "orx-reports",
-    description: "Write and organize durable outputs in the artifacts directory. Use before creating or organizing artifacts, including reports, summaries, comparisons, figures, and exported data, or when a line of work concludes.",
+    description: "Save and organize durable research outputs in the artifacts directory. Invoke when creating or reorganizing a report, exported dataset, or other deliverable; use `orx-results` for analysis and `orx-figures` when constructing charts.",
     content: REPORTS,
     resources: &[],
 };
@@ -212,20 +226,33 @@ const S_PAPER: AgentSkill = AgentSkill {
 };
 const S_FIGURES: AgentSkill = AgentSkill {
     name: "orx-figures",
-    description: "Publication-quality figures in matplotlib or TikZ: learning curves, scaling laws, benchmark and ablation comparisons, Pareto trade-offs, heatmaps and confusion matrices, method diagrams. Covers the shared style module, sizing, uncertainty, and vector export. Use whenever you plot, chart, or visualize results, add a figure to a paper or report, or one looks unpolished; then read one reference.",
+    description: "Create or update interactive HTML charts for chat and static publication figures. Invoke before writing plotting code or when an existing figure needs correction; use `orx-results` for experiment interpretation and `orx-logs` for retrieving measurements.",
     content: FIGURES,
     resources: FIGURES_RESOURCES,
 };
-const S_EVIDENCE: AgentSkill = AgentSkill {
-    name: "orx-evidence",
-    description: "Prepare and inspect experiment run evidence: design stdout metrics and summaries, read persisted results with `orx logs`, and validate run-derived claims. Use before launching a run whose output must be judged, after a run finishes, or before analyzing or reporting run results.",
-    content: EVIDENCE,
+const S_LOGS: AgentSkill = AgentSkill {
+    name: "orx-logs",
+    description: "Locate and read persisted experiment output with `orx logs`. Invoke when inspecting run progress, debugging a run failure, or retrieving recorded configuration and measurements; use `orx-results` to interpret the findings.",
+    content: LOGS,
+    resources: &[],
+};
+const S_RESULTS: AgentSkill = AgentSkill {
+    name: "orx-results",
+    description: "Interpret and summarize measured experiment results. Invoke before reporting measured results, including summarizing a completed run, comparing runs, evaluating an outcome, or recommending a next experiment from run evidence; retrieve missing output with `orx-logs`.",
+    content: RESULTS,
     resources: &[],
 };
 const S_INSTANCES: AgentSkill = AgentSkill {
     name: "orx-instances",
     description: "Create standalone OpenResearch compute instances with `orx instance create`. Use when the user wants a persistent machine for manual or ad-hoc work rather than an experiment run.",
     content: INSTANCES,
+    resources: &[],
+};
+
+const S_FEEDBACK: AgentSkill = AgentSkill {
+    name: "orx-feedback",
+    description: "Report product feedback about OpenResearch itself with `orx feedback`. Use when the user expresses frustration with an OpenResearch feature or bug, says a feature would be nice to have, or you hit a meaningful limitation or bug in the orx CLI, the agent harness, or the app. Not for research results, the user's own code, or minor nits.",
+    content: FEEDBACK,
     resources: &[],
 };
 
@@ -240,12 +267,14 @@ pub fn skills(set: SkillSet) -> Vec<&'static AgentSkill> {
             &S_AGENT_DELEGATION,
             &S_COMPUTE,
             &S_INSTANCES,
-            &S_EVIDENCE,
+            &S_LOGS,
+            &S_RESULTS,
             &S_REPORTS,
             &S_FIGURES,
             &S_PAPER,
             &S_CUSTOMIZE,
             &S_LIT,
+            &S_FEEDBACK,
         ],
         SkillSet::Full => vec![
             &S_CREATE,
@@ -255,12 +284,14 @@ pub fn skills(set: SkillSet) -> Vec<&'static AgentSkill> {
             &S_AGENT_DELEGATION,
             &S_COMPUTE,
             &S_INSTANCES,
-            &S_EVIDENCE,
+            &S_LOGS,
+            &S_RESULTS,
             &S_REPORTS,
             &S_FIGURES,
             &S_PAPER,
             &S_CUSTOMIZE,
             &S_LIT,
+            &S_FEEDBACK,
         ],
     }
 }
@@ -499,7 +530,8 @@ mod tests {
             "agent-delegation",
             "compute",
             "instances",
-            "evidence",
+            "logs",
+            "results",
             "reports",
             "customize",
         ] {
@@ -521,12 +553,14 @@ mod tests {
     }
 
     #[test]
-    fn evidence_and_reports_have_distinct_ownership() {
-        assert!(EVIDENCE.contains("Validate before reporting"));
-        assert!(EVIDENCE.contains("Truncated output is not evidence of absence"));
-        assert!(!EVIDENCE.contains("<file path="));
+    fn logs_results_and_reports_have_distinct_ownership() {
+        assert!(LOGS.contains("Truncated output is not evidence of absence"));
+        assert!(!LOGS.contains("Summarize an experiment"));
+        assert!(RESULTS.contains("Validate before reporting"));
+        assert!(!RESULTS.contains("<file path="));
         assert!(REPORTS.contains("evidence-and-links contract"));
-        assert!(REPORTS.contains("Load `orx-evidence`"));
+        assert!(REPORTS.contains("Load `orx-results`"));
+        assert!(find("evidence", SkillSet::Local).is_none());
     }
 
     #[test]
@@ -706,5 +740,41 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn compute_skill_commands_parse() {
+        use clap::Parser;
+        let skill = find("compute", SkillSet::Full).expect("compute skill");
+        let docs = std::iter::once(skill.content).chain(skill.resources.iter().map(|r| r.content));
+        let mut ssh_config_checked = 0;
+        for doc in docs {
+            assert!(
+                !doc.replace("orx compute ssh-config", "")
+                    .contains("ssh-config"),
+                "ssh-config must be written as `orx compute ssh-config`"
+            );
+            let spans = doc.split('`').chain(doc.lines());
+            for span in spans.filter_map(|s| s.trim().strip_prefix("orx compute")) {
+                let command = span.split(" #").next().unwrap_or_default();
+                // Collapse `<multi word placeholder>` into one argument.
+                let mut args = vec!["orx".to_owned(), "compute".to_owned()];
+                for (i, part) in command.split(['<', '>']).enumerate() {
+                    if i % 2 == 1 {
+                        args.push("x".to_owned());
+                    } else {
+                        args.extend(part.split_whitespace().map(str::to_owned));
+                    }
+                }
+                if let Err(e) = crate::Cli::try_parse_from(&args) {
+                    panic!("{args:?}: {e}");
+                }
+                ssh_config_checked += usize::from(args.iter().any(|a| a == "ssh-config"));
+            }
+        }
+        assert!(
+            ssh_config_checked >= 2,
+            "ssh-config commands were not checked"
+        );
     }
 }

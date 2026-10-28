@@ -19,7 +19,7 @@ export function readChatState(projectId: string, activeId: string | null): ChatS
   const sessions = queryClient.getQueryData(listChatSessionsQuery(projectId).queryKey) ?? [];
   const busySessions = new Set(sessions.filter((session) => session.busy).map((session) => session.id));
   const state: ChatState = { messagesBySession: {}, queuedBySession: {}, activeLeafBySession: {}, busySessions };
-  const visible = new Set(busySessions);
+  const visible = new Set(sessions.map((session) => session.id));
   if (activeId) visible.add(activeId);
   for (const id of visible) {
     const snapshot = queryClient.getQueryData(getChatMessagesQuery(id).queryKey);
@@ -61,7 +61,7 @@ export function useChatState(projectId: string, activeId: string | null) {
   const enabled = Boolean(activeId) && !deletedSessionIds.has(activeId ?? "");
   const history = useQuery({ ...getChatMessagesQuery(activeId ?? ""), enabled, subscribed: enabled });
   const dataRevision = useSyncExternalStore(subscribeChat, getRevision);
-  const state = useMemo(() => readChatState(projectId, activeId), [projectId, activeId, dataRevision]);
+  const state = useMemo(() => readChatState(projectId, activeId), [projectId, activeId, dataRevision, history.data]);
   const generation = workspaceScope()[1];
   const dispatch = useCallback((action: Action) => {
     if (isCurrentScope(["workspace", generation])) dispatchChat(projectId, action);

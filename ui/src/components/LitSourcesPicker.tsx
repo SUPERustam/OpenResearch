@@ -10,7 +10,7 @@ import { setLitSources } from "../api";
 import { LitSourceLogo, LIT_SOURCE_NAME, type LitSource } from "./LitSourceLogo";
 import { MenuItem, SwitchIndicator } from "./ui";
 
-const LIT_SOURCES: LitSource[] = ["alphaxiv", "openalex", "biorxiv"];
+const LIT_SOURCES: LitSource[] = ["alphaxiv", "openalex", "biorxiv", "pubmed"];
 
 export function LitSourcesList() {
   const options = getLitSourcesQuery();
@@ -40,7 +40,7 @@ export function LitSourcesList() {
             disabled={saving}
             onClick={() => toggle(key)}
           >
-            <span className="inline-flex items-center gap-[9px]">
+            <span className="inline-flex items-center gap-2">
               <LitSourceLogo source={key} size={16} decorative />
               {LIT_SOURCE_NAME[key]}
             </span>

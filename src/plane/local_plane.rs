@@ -1,13 +1,12 @@
 //! Local implementations of project, experiment, run, and log commands.
 
 use std::collections::HashMap;
-use std::io::{Read as _, Seek as _};
 use std::time::{Duration, Instant};
 
-use super::{CreateExperimentSpec, DescInput, LogRequest, ProjectEdit, Run, RunListing, RunLog};
+use super::{CreateExperimentSpec, DescInput, ProjectEdit, Run, RunListing};
 use crate::error::{anyhow, Result};
 use crate::local::model::{LocalExperiment, LocalProject};
-use crate::store::{log_path, Store};
+use crate::store::Store;
 use crate::ExpRunArgs;
 
 /// The local-store plane. `project`/`experiment` carry the row the resolver
@@ -19,8 +18,6 @@ pub struct LocalPlane {
     pub(super) experiment: Option<LocalExperiment>,
     pub(super) id: String,
 }
-
-const LOCAL_DEFAULT_BYTES: i64 = 64 * 1024;
 
 impl LocalPlane {
     /// The resolved project row, or an error when called on a plane built by a
@@ -38,6 +35,13 @@ impl LocalPlane {
             .ok_or_else(|| anyhow!("internal: local plane missing its experiment row"))
     }
 
+    /// Demo analytics label for a launch, keyed on the experiment's owning project.
+    pub(super) fn demo_run_label(&self) -> Option<&'static str> {
+        self.experiment
+            .as_ref()
+            .and_then(crate::local::demo::run_label)
+    }
+
     pub async fn list_runs(&self) -> Result<RunListing> {
         let store = &self.store;
         let project_id = &self.id;
@@ -52,55 +56,7 @@ impl LocalPlane {
         Ok(RunListing { runs, titles })
     }
 
-    pub async fn read_log(&self, req: LogRequest) -> Result<RunLog> {
-        let run_id = &self.id;
-        let path = log_path(run_id);
-        let total = match std::fs::metadata(&path) {
-            Ok(m) => m.len() as i64,
-            Err(_) => {
-                return Ok(RunLog {
-                    content: Vec::new(),
-                    start_byte: 0,
-                    end_byte: 0,
-                    total_bytes: 0,
-                    source: "local file".to_string(),
-                    truncated_before: false,
-                    truncated_after: false,
-                    missing_local: true,
-                });
-            }
-        };
-
-        let max = req.max_bytes.unwrap_or(LOCAL_DEFAULT_BYTES).max(0);
-        let (start, end) = match req.mode.as_str() {
-            "range" => (
-                req.start_byte.unwrap_or(0).clamp(0, total),
-                req.end_byte.unwrap_or(total).clamp(0, total),
-            ),
-            "head" => (0, max.min(total)),
-            _ => ((total - max).max(0), total),
-        };
-
-        let mut content = Vec::new();
-        if end > start {
-            let mut file = std::fs::File::open(&path)?;
-            file.seek(std::io::SeekFrom::Start(start as u64))?;
-            file.take((end - start) as u64).read_to_end(&mut content)?;
-        }
-
-        Ok(RunLog {
-            content,
-            start_byte: start,
-            end_byte: end,
-            total_bytes: total,
-            source: "local file".to_string(),
-            truncated_before: start > 0,
-            truncated_after: end < total,
-            missing_local: false,
-        })
-    }
-
-    pub async fn view_project(&self) -> Result<()> {
+    pub async fn view_project(&self, all: bool) -> Result<()> {
         let store = &self.store;
         let project = self.project()?;
         println!("{} (local)", project.name);
@@ -119,7 +75,11 @@ impl LocalPlane {
             ),
         }
 
-        let experiments = store.list_experiments_by_project(&project.id)?;
+        let experiments: Vec<_> = store
+            .list_experiments_by_project(&project.id)?
+            .into_iter()
+            .filter(|e| all || !e.archived)
+            .collect();
         println!("\nExperiments");
         if experiments.is_empty() {
             println!("  (none)");
@@ -131,10 +91,11 @@ impl LocalPlane {
                     ""
                 };
                 println!(
-                    "  {}  {}{}  ({})",
+                    "  {}  {}{}{}  ({})",
                     e.id,
                     e.display_name(),
                     root,
+                    if e.archived { " [archived]" } else { "" },
                     e.branch_name
                 );
             }
@@ -174,12 +135,15 @@ impl LocalPlane {
 
     // --- experiment -------------------------------------------------------
 
-    pub async fn experiment_status(&self) -> Result<()> {
+    pub async fn experiment_status(&self, scheduler: bool) -> Result<()> {
         let store = &self.store;
         let exp = self.experiment()?;
         println!("{}  ({})  [local]", exp.display_name(), exp.agent_status);
         println!("  id:       {}", exp.id);
         println!("  branch:   {}", exp.branch_name);
+        if exp.archived {
+            println!("  archived: yes");
+        }
         match &exp.parent_experiment_id {
             Some(parent_id) => match store.get_local_experiment(parent_id)? {
                 Some(parent) => {
@@ -189,10 +153,15 @@ impl LocalPlane {
             },
             None => println!("  parent:   — (root experiment)"),
         }
-        if exp.run_command.is_empty() {
-            println!("  command:  — (not set)");
-        } else {
-            println!("  command:  {}", exp.run_command);
+        let project = store.get_local_project(&exp.project_id)?;
+        let project_command = project.as_ref().and_then(|p| p.run_command.as_deref());
+        match crate::local::experiments::effective_run_command(exp, project_command) {
+            Some(cmd) if !exp.run_command.trim().is_empty() => println!("  command:  {cmd}"),
+            Some(cmd) => println!("  command:  {cmd} (project default)"),
+            None => println!(
+                "  command:  — (not set — `orx project edit {} --run-command '<cmd>'`)",
+                exp.project_id
+            ),
         }
 
         match store.latest_run_for_experiment(&exp.id)? {
@@ -211,6 +180,38 @@ impl LocalPlane {
                     crate::output::format_duration(run.duration_secs),
                     run.updated_display
                 );
+                if let Ok(backend) = crate::jobs::BackendDescriptor::parse(&r.backend_json) {
+                    if backend.kind == "slurm_job" {
+                        println!(
+                            "  requested time limit: {}",
+                            backend
+                                .timeout_secs
+                                .map(|s| format!("{s}s"))
+                                .unwrap_or_else(|| "unknown (older run or cluster default)".into())
+                        );
+                        if backend.job_id.is_some() {
+                            println!("  {}", crate::local::slurm::status_resources(&backend));
+                        }
+                        if let Some(error) = backend.monitoring_error.as_deref() {
+                            println!("  {error}");
+                        }
+                        if scheduler {
+                            match backend.slurm_ref() {
+                                Ok((host, job_id)) => match tokio::time::timeout(
+                                    std::time::Duration::from_secs(15),
+                                    crate::jobs::slurm::diagnostics(host, job_id),
+                                )
+                                .await
+                                {
+                                    Ok(Ok(details)) => println!("  scheduler: {details}"),
+                                    Ok(Err(error)) => println!("  scheduler: unknown ({error})"),
+                                    Err(_) => println!("  scheduler: unknown (query timed out)"),
+                                },
+                                Err(_) => println!("  scheduler: unknown (job not submitted)"),
+                            }
+                        }
+                    }
+                }
                 if let Some(detail) = run.failure_detail() {
                     println!("  {detail}");
                 }
@@ -219,6 +220,18 @@ impl LocalPlane {
                 }
             }
             None => println!("  last run: — (never run)"),
+        }
+        // A forced relaunch can leave an older run live; monitoring alerts send agents here.
+        for older in store.list_runs_by_experiment(&exp.id)?.iter().skip(1) {
+            if !matches!(older.status.as_str(), "starting" | "running") {
+                continue;
+            }
+            let error = crate::jobs::BackendDescriptor::parse(&older.backend_json)
+                .ok()
+                .and_then(|backend| backend.monitoring_error);
+            if let Some(error) = error {
+                println!("  older live run {}: {error}", older.id);
+            }
         }
         Ok(())
     }
@@ -254,6 +267,10 @@ impl LocalPlane {
             args.backend = Some("local".to_string());
         }
         crate::compute::validate_run_args(&args)?;
+        if let Some(backend) = args.backend.as_deref() {
+            warn_unreachable_trackio(backend);
+        }
+        args.agent_origin = crate::agent_origin();
         // Coarse backend label for analytics; the backend name is already an
         // enum, never user data. Recorded before the (borrowing) dispatch below.
         let backend_label = args.backend.clone();
@@ -265,6 +282,9 @@ impl LocalPlane {
                 if let Some(job_id) = summary.job_id {
                     let label = if backend == "local" { "dir" } else { "job" };
                     println!("  {label}  {job_id}");
+                }
+                if let Some(resources) = summary.slurm_resources {
+                    println!("  {resources}");
                 }
                 println!("  run  {}", summary.run_id);
                 println!(
@@ -312,13 +332,13 @@ impl LocalPlane {
         };
         // Key event, fired only on a successful launch. Coarse backend only.
         // Validation above guarantees a known backend before either dispatch path.
-        if result.is_ok() {
+        if result.is_ok() && backend_label.as_deref() != Some("openresearch") {
             let target = backend_label.as_deref().unwrap_or("unknown");
             crate::telemetry::capture_experiment_started("run", true, Some(target));
             // A launch out of the bundled demo is the clearest signal the demo
             // converted into real work, so it is counted separately.
-            if self.id == crate::local::demo::PROJECT_ID {
-                crate::telemetry::capture_demo_experiment_started("run", target);
+            if let Some(label) = self.demo_run_label() {
+                crate::telemetry::capture_demo_experiment_started("run", label);
                 crate::telemetry::capture_first_action("demo", "run_experiment");
             }
         }
@@ -340,7 +360,13 @@ impl LocalPlane {
         for r in &in_flight {
             match trusted_port {
                 Some(port) => crate::commands::up::cancel_run_via_up(port, &r.id).await?,
-                None => crate::commands::exp::request_local_run_cancel(store, &r.id)?,
+                None => crate::commands::exp::request_local_run_cancel(
+                    store,
+                    &r.id,
+                    &crate::commands::exp::exp_cancel_reason(
+                        crate::local::chat::launching_chat_session().as_deref(),
+                    ),
+                )?,
             }
             println!("\u{2713} Cancel requested for run {}.", r.id);
         }
@@ -351,8 +377,19 @@ impl LocalPlane {
         let store = &self.store;
         let exp_id = &self.id;
         let mut last_status: Option<String> = None;
+        let mut lock_notified = false;
         loop {
-            match store.latest_run_for_experiment(exp_id)? {
+            store.set_busy_timeout(busy_timeout_left(deadline))?;
+            let run = match store.latest_run_for_experiment(exp_id) {
+                Ok(run) => run,
+                Err(error) if is_db_locked(&error) => {
+                    note_db_locked(&mut lock_notified);
+                    sleep_until_or_timeout(interval, deadline).await?;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            match run {
                 None => {
                     if last_status.is_none() {
                         eprintln!("No run yet for this experiment — waiting for one to start…");
@@ -381,11 +418,18 @@ impl LocalPlane {
     pub async fn wait_project(&self, interval: Duration, deadline: Instant) -> Result<()> {
         let store = &self.store;
         let project_id = &self.id;
-        let snapshot: HashMap<String, String> = store
-            .list_runs_by_project(project_id)?
-            .into_iter()
-            .map(|r| (r.id, r.status))
-            .collect();
+        let snapshot: HashMap<String, String> = retry_on_db_lock(
+            || {
+                store.set_busy_timeout(busy_timeout_left(deadline))?;
+                store.list_runs_by_project(project_id)
+            },
+            interval,
+            deadline,
+        )
+        .await?
+        .into_iter()
+        .map(|r| (r.id, r.status))
+        .collect();
         let in_flight = snapshot
             .values()
             .filter(|s| !crate::local::is_terminal(s))
@@ -406,10 +450,19 @@ impl LocalPlane {
             in_flight
         );
 
+        let mut lock_notified = false;
         loop {
             sleep_until_or_timeout(interval, deadline).await?;
 
-            let current = store.list_runs_by_project(project_id)?;
+            store.set_busy_timeout(busy_timeout_left(deadline))?;
+            let current = match store.list_runs_by_project(project_id) {
+                Ok(current) => current,
+                Err(error) if is_db_locked(&error) => {
+                    note_db_locked(&mut lock_notified);
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             let mut completed: Vec<(String, Option<String>)> = Vec::new();
             for r in &current {
                 if !crate::local::is_terminal(&r.status) {
@@ -516,12 +569,75 @@ impl LocalPlane {
             println!("  command: {}", experiment.run_command);
         }
         println!();
-        println!("To edit it, check out the branch in the project's local clone:");
-        println!("  cd {}", project.repo_path);
-        println!("  git checkout {}", experiment.branch_name);
-        println!("  # …edit, then…");
-        println!("  git commit -am \"<msg>\"");
+        super::checkout_hint::print(&project.repo_path, &experiment.branch_name);
         Ok(())
+    }
+}
+
+fn warn_unreachable_trackio(backend: &str) {
+    use crate::local::trackio::{self, Target};
+    if !crate::compute::backend(backend).is_ok_and(|b| b.capabilities().remote) {
+        return;
+    }
+    match trackio::target() {
+        Target::Server(url) if trackio::is_local_only(&url) => eprintln!(
+            "warning: {} is {url}, which a {backend} run may not reach, so its Trackio metrics may not arrive. Save an address the remote machine can reach.",
+            trackio::SERVER_URL
+        ),
+        // Only for someone already using Trackio, so non-users see no noise.
+        Target::Local if trackio::used_locally() => eprintln!(
+            "warning: no {} or {} is saved, so this {backend} run's Trackio metrics stay on that machine and orx will not show them.",
+            trackio::SPACE_ID,
+            trackio::SERVER_URL
+        ),
+        _ => {}
+    }
+}
+
+/// True when `error` is a transient SQLite lock ("database is locked") —
+/// contention a wait command should outlast, not die on.
+pub(crate) fn is_db_locked(error: &crate::error::Error) -> bool {
+    matches!(
+        error.downcast_ref::<rusqlite::Error>(),
+        Some(rusqlite::Error::SqliteFailure(failure, _))
+            if failure.code == rusqlite::ErrorCode::DatabaseBusy
+    )
+}
+
+fn note_db_locked(notified: &mut bool) {
+    if !*notified {
+        eprintln!("orx.db is locked by another process — retrying within the wait timeout…");
+        *notified = true;
+    }
+}
+
+/// Lock wait for the next store call: the connection default, shrunk to the
+/// time left before `deadline` so one blocked operation can't overshoot it.
+pub(crate) fn busy_timeout_left(deadline: Instant) -> Duration {
+    deadline
+        .saturating_duration_since(Instant::now())
+        .min(crate::store::BUSY_TIMEOUT)
+}
+
+/// Run `attempt`, retrying while the store reports a transient lock, until
+/// `deadline` — after which it reports the wait's usual timeout error.
+pub(crate) async fn retry_on_db_lock<T>(
+    mut attempt: impl FnMut() -> Result<T>,
+    interval: Duration,
+    deadline: Instant,
+) -> Result<T> {
+    let mut notified = false;
+    loop {
+        match attempt() {
+            Err(error) if is_db_locked(&error) => note_db_locked(&mut notified),
+            Err(error) => return Err(error),
+            Ok(value) => {
+                // An attempt that finished only after the deadline timed out.
+                sleep_until_or_timeout(Duration::ZERO, deadline).await?;
+                return Ok(value);
+            }
+        }
+        sleep_until_or_timeout(interval, deadline).await?;
     }
 }
 
@@ -535,4 +651,86 @@ async fn sleep_until_or_timeout(interval: Duration, deadline: Instant) -> Result
         return Err(anyhow!("Timed out waiting for a run state change."));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn db_busy() -> rusqlite::Error {
+        rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+            Some("database is locked".to_string()),
+        )
+    }
+
+    #[test]
+    fn is_db_locked_matches_only_sqlite_busy() {
+        let busy: crate::error::Error = db_busy().into();
+        assert!(is_db_locked(&busy));
+
+        let busy_snapshot: crate::error::Error = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY_SNAPSHOT),
+            None,
+        )
+        .into();
+        assert!(is_db_locked(&busy_snapshot));
+
+        assert!(!is_db_locked(&anyhow!("some other error")));
+    }
+
+    #[tokio::test]
+    async fn retry_on_db_lock_retries_busy_until_success() {
+        let mut attempts = 0;
+        let result = retry_on_db_lock(
+            || {
+                attempts += 1;
+                if attempts < 3 {
+                    Err(db_busy().into())
+                } else {
+                    Ok(attempts)
+                }
+            },
+            Duration::from_millis(1),
+            Instant::now() + Duration::from_secs(10),
+        )
+        .await;
+        assert_eq!(result.unwrap(), 3);
+    }
+
+    #[tokio::test]
+    async fn retry_on_db_lock_propagates_other_errors() {
+        let result: Result<()> = retry_on_db_lock(
+            || Err(anyhow!("not a lock")),
+            Duration::from_millis(1),
+            Instant::now() + Duration::from_secs(10),
+        )
+        .await;
+        assert_eq!(result.unwrap_err().to_string(), "not a lock");
+    }
+
+    #[tokio::test]
+    async fn retry_on_db_lock_times_out_while_locked() {
+        let result: Result<()> = retry_on_db_lock(
+            || Err(db_busy().into()),
+            Duration::from_millis(1),
+            Instant::now() + Duration::from_millis(30),
+        )
+        .await;
+        assert!(result.unwrap_err().to_string().contains("Timed out"));
+    }
+
+    #[tokio::test]
+    async fn retry_on_db_lock_reports_timeout_when_unblocked_past_deadline() {
+        let result: Result<()> = retry_on_db_lock(
+            || {
+                std::thread::sleep(Duration::from_millis(30));
+                Ok(())
+            },
+            Duration::from_millis(1),
+            Instant::now() + Duration::from_millis(10),
+        )
+        .await;
+        assert!(result.unwrap_err().to_string().contains("Timed out"));
+    }
 }

@@ -1,3 +1,4 @@
+import { DirectionProvider } from "@base-ui/react/direction-provider";
 import { m } from "../paraglide/messages.js";
 import { ltr } from "../i18n";
 import { useLocale } from "../locale";
@@ -13,7 +14,9 @@ import {
   type Viewport,
 } from "@xyflow/react";
 import { useQuery } from "@tanstack/react-query";
-import { Ellipsis, FolderTree, Package, Terminal } from "lucide-react";
+import { Archive, ChartLine, Ellipsis, FolderTree, Package, Terminal } from "lucide-react";
+import { useTrackioRuns } from "../queries/settings";
+import { Menu } from "@base-ui/react/menu";
 import { GitHubMark } from "./BackendLogos";
 import { ExperimentArtifactsMenu } from "./ExperimentArtifactsMenu";
 import {
@@ -21,6 +24,7 @@ import {
   memo,
   useCallback,
   useContext,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -29,6 +33,7 @@ import {
   githubBranchUrl,
   fmtNumber,
   runDisplayStatus,
+  trackioRunUrl,
   timeAgo,
   type ArtifactEntry,
   type Experiment,
@@ -38,6 +43,8 @@ import {
 import type { ExperimentView } from "./DetailDrawer";
 import type { CodeView } from "./CodeTab";
 import { ExpHoverCard, dismissTreeHoverCards, onTreeViewportMove, useHoverIntent } from "./ExpHoverCard";
+import { ArchiveMenu, type ArchiveActions } from "./ArchiveMenu";
+import { MenuItem } from "./ui";
 import { statusLabel, StatusBadge } from "./StatusBadge";
 import { experimentArtifactFiles } from "../experimentArtifacts";
 import { getArtifactsQuery } from "../queries/files";
@@ -52,7 +59,7 @@ const EMPTY_STATE_CLASS_NAME = [
   "[&_p.empty-state-hint]:text-subtext empty-state-cta gap-1.5",
 ].join(" ");
 
-const NODE_W = 304;
+const NODE_W = 336;
 const NODE_H = 132;
 const GAP_X = 44;
 const GAP_Y = 72;
@@ -60,6 +67,8 @@ const MAX_SQUARES = 8;
 // Keep in sync with the inline `.elided-node` classes below.
 const ELIDED_W = 148;
 const ELIDED_H = 44;
+const ARCHIVED_W = 160;
+const ARCHIVED_GAP_Y = 64;
 
 type ExpNodeData = {
   exp: Experiment;
@@ -77,25 +86,35 @@ type ExpNodeData = {
     intent: TabOpenIntent,
   ) => void;
   onOpenArtifact: (path: string, intent: TabOpenIntent) => void;
+  onArchive: (id: string, direction: "ancestors" | "descendants" | "only", archived: boolean) => void;
+  onDelete: (id: string) => void;
+  actions: ArchiveActions;
 };
 type ExpFlowNode = Node<ExpNodeData, "exp">;
+
+type ArchivedNodeData = {
+  rootId: string;
+  count: number;
+  onRestoreRegion: (id: string) => void;
+};
+type ArchivedFlowNode = Node<ArchivedNodeData, "archived">;
 
 type ElidedNodeData = {
   count: number;
   onShowProjectScope: () => void;
 };
 type ElidedFlowNode = Node<ElidedNodeData, "elided">;
-type FlowNode = ExpFlowNode | ElidedFlowNode;
+type FlowNode = ExpFlowNode | ArchivedFlowNode | ElidedFlowNode;
 
 interface TreeNode {
   exp: Experiment;
   children: TreeNode[];
 }
 
-/** What the layout actually draws: real experiments plus "…" placeholders
- * standing in for experiments from other tasks (Current task scope only). */
+/** What the layout draws: experiment cards and hidden-region pills. */
 type DisplayNode =
   | { kind: "exp"; exp: Experiment; children: DisplayNode[] }
+  | { kind: "archived"; id: string; rootId: string; count: number; children: DisplayNode[] }
   | { kind: "elided"; id: string; count: number; children: DisplayNode[] };
 
 function buildForest(experiments: Experiment[]): TreeNode[] {
@@ -119,10 +138,8 @@ function buildForest(experiments: Experiment[]): TreeNode[] {
 
 /** Keep the nodes `mine` accepts, collapse each maximal rejected region on the
  * path to them into one "…" pill, and drop rejected subtrees that lead
- * nowhere. An always-true predicate (Project scope) reproduces the forest
- * as-is. Elided ids key off the region root, so they're stable across
- * renders. */
-function elideForeignRegions(roots: TreeNode[], mine: (n: TreeNode) => boolean): DisplayNode[] {
+ * nowhere. Elided ids key off the region root, so they're stable across renders. */
+function elideHiddenRegions(roots: TreeNode[], mine: (n: TreeNode) => boolean): DisplayNode[] {
   // Memoized so the pass stays linear on deep chains.
   const sizes = new Map<TreeNode, number>();
   const size = (n: TreeNode): number => {
@@ -174,8 +191,31 @@ function elideForeignRegions(roots: TreeNode[], mine: (n: TreeNode) => boolean):
   return roots.flatMap(visit);
 }
 
+function collapseArchivedRegions(roots: DisplayNode[]): DisplayNode[] {
+  function visit(node: DisplayNode): DisplayNode {
+    if (node.kind !== "exp" || !node.exp.archived)
+      return { ...node, children: node.children.map(visit) };
+    let count = 0;
+    const children: DisplayNode[] = [];
+    function absorb(archived: DisplayNode & { kind: "exp" }) {
+      count += 1;
+      for (const child of archived.children) {
+        if (child.kind === "exp" && child.exp.archived) absorb(child);
+        else children.push(visit(child));
+      }
+    }
+    absorb(node);
+    return { kind: "archived", id: `ar-${node.exp.id}`, rootId: node.exp.id, count, children };
+  }
+  return roots.map(visit);
+}
+
 function nodeWidth(node: DisplayNode): number {
-  return node.kind === "exp" ? NODE_W : ELIDED_W;
+  return node.kind === "exp" ? NODE_W : node.kind === "archived" ? ARCHIVED_W : ELIDED_W;
+}
+
+function nodeHeight(node: DisplayNode): number {
+  return node.kind === "exp" ? NODE_H : ELIDED_H;
 }
 
 function nodeId(node: DisplayNode): string {
@@ -216,6 +256,9 @@ const ExpNode = memo(function ExpNode({ data }: NodeProps<ExpFlowNode>) {
     onOpenView,
     onOpenCode,
     onOpenArtifact,
+    onArchive,
+    onDelete,
+    actions,
   } = data;
   const status = latestRun ? runDisplayStatus(latestRun) : undefined;
   const live = status === "running" || status === "starting" || status === "cancelling";
@@ -226,6 +269,8 @@ const ExpNode = memo(function ExpNode({ data }: NodeProps<ExpFlowNode>) {
     () => experimentArtifactFiles(artifacts.entries, exp.slug),
     [artifacts.entries, exp.slug],
   );
+  const trackio = useTrackioRuns(exp.projectId, live).data;
+  const hasTrackio = latestRun !== null && trackioRunUrl(trackio, latestRun.id) !== null;
 
   // `data` is rebuilt on every experiments/runs change (a superset of the
   // re-layouts that matter), so it doubles as the hover card's re-measure
@@ -271,7 +316,7 @@ const ExpNode = memo(function ExpNode({ data }: NodeProps<ExpFlowNode>) {
   return (
     <div
       ref={rootRef}
-      className={`exp-node w-76 border border-border rounded-md bg-background py-2.5 px-3 shadow-tree text-sm transition-[box-shadow] duration-120 ease-standard [&:hover]:shadow-tree-hover [&.live]:border-accent-teal [&.live]:shadow-tree-live [&_.node-overview-link]:block [&_.node-overview-link]:w-full [&_.node-overview-link]:p-0 [&_.node-overview-link]:border-0 [&_.node-overview-link]:bg-transparent [&_.node-overview-link]:text-inherit [&_.node-overview-link]:[font:inherit] [&_.node-overview-link]:text-start [&_.node-overview-link]:cursor-pointer [&_.node-overview-link:hover_.node-slug]:underline [&_.node-overview-link:hover_.node-slug]:underline-offset-[3px] [&_.node-overview-link:focus-visible]:outline-2 [&_.node-overview-link:focus-visible]:outline-solid [&_.node-overview-link:focus-visible]:outline-accent [&_.node-overview-link:focus-visible]:outline-offset-4 [&_.node-overview-link:focus-visible]:rounded-xs [&_.node-eyebrow]:flex [&_.node-eyebrow]:items-center [&_.node-eyebrow]:justify-between [&_.node-eyebrow]:gap-2 [&_.node-eyebrow]:mb-1.5 [&_.node-eyebrow]:text-xs [&_.node-eyebrow]:font-medium [&_.node-eyebrow]:text-muted [&_.node-head]:flex [&_.node-head]:items-center [&_.node-head]:gap-[7px] [&_.node-head]:min-w-0 [&_.node-status]:w-2 [&_.node-status]:h-2 [&_.node-status]:rounded-full [&_.node-status]:shrink-0 [&_.node-slug]:text-sm [&_.node-slug]:font-semibold [&_.node-slug]:text-text [&_.node-slug]:flex-1 [&_.node-slug]:min-w-0 [&_.node-slug]:overflow-hidden [&_.node-slug]:text-ellipsis [&_.node-slug]:whitespace-nowrap [&_.node-title]:mt-1 [&_.node-title]:text-text [&_.node-title]:text-sm [&_.node-title]:line-clamp-2 [&_.node-meta]:mt-2 [&_.node-meta]:flex [&_.node-meta]:items-center [&_.node-meta]:gap-2 [&_.node-meta]:text-xs [&_.node-meta]:text-muted [&_.node-actions]:mt-2 [&_.node-actions]:pt-1.5 [&_.node-actions]:border-t [&_.node-actions]:border-t-border-variant [&_.node-actions]:flex [&_.node-actions]:items-center [&_.node-actions]:flex-nowrap [&_.node-actions]:gap-[3px] [&_.node-action]:inline-flex [&_.node-action]:items-center [&_.node-action]:gap-[5px] [&_.node-action]:py-[3px] [&_.node-action]:px-1.5 [&_.node-action]:text-sm [&_.node-action]:font-medium [&_.node-action]:text-text [&_.node-action]:rounded-sm [&_.node-action]:no-underline [&_.node-action:hover]:text-text [&_.node-action:hover]:bg-surface [&_.node-action-ext]:ms-auto [&_.node-action-ext]:py-[3px] [&_.node-action-ext]:px-[5px] ${live ? "live" : ""}`}
+      className={`exp-node w-84 border border-border rounded-md bg-background py-2.5 px-3 shadow-hairline text-sm transition-[box-shadow] duration-120 ease-standard [&:hover]:shadow-tree-hover [&.live]:border-accent-teal [&.live]:shadow-tree-live [&_.node-overview-link]:block [&_.node-overview-link]:w-full [&_.node-overview-link]:p-0 [&_.node-overview-link]:border-0 [&_.node-overview-link]:bg-transparent [&_.node-overview-link]:text-inherit [&_.node-overview-link]:[font:inherit] [&_.node-overview-link]:text-start [&_.node-overview-link]:cursor-pointer [&_.node-overview-link:hover_.node-slug]:underline [&_.node-overview-link:hover_.node-slug]:underline-offset-[3px] [&_.node-overview-link:focus-visible]:outline-2 [&_.node-overview-link:focus-visible]:outline-solid [&_.node-overview-link:focus-visible]:outline-focus [&_.node-overview-link:focus-visible]:outline-offset-4 [&_.node-overview-link:focus-visible]:rounded-xs [&_.node-eyebrow]:flex [&_.node-eyebrow]:items-center [&_.node-eyebrow]:justify-between [&_.node-eyebrow]:gap-2 [&_.node-eyebrow]:mb-1.5 [&_.node-eyebrow]:text-xs [&_.node-eyebrow]:font-medium [&_.node-eyebrow]:text-muted [&_.node-head]:flex [&_.node-head]:items-center [&_.node-head]:gap-2 [&_.node-head]:min-w-0 [&_.node-status]:w-2 [&_.node-status]:h-2 [&_.node-status]:rounded-full [&_.node-status]:shrink-0 [&_.node-slug]:text-sm [&_.node-slug]:font-semibold [&_.node-slug]:text-text [&_.node-slug]:flex-1 [&_.node-slug]:min-w-0 [&_.node-slug]:overflow-hidden [&_.node-slug]:text-ellipsis [&_.node-slug]:whitespace-nowrap [&_.node-title]:mt-1 [&_.node-title]:text-text [&_.node-title]:text-sm [&_.node-title]:line-clamp-2 [&_.node-meta]:mt-2 [&_.node-meta]:flex [&_.node-meta]:items-center [&_.node-meta]:gap-2 [&_.node-meta]:text-xs [&_.node-meta]:text-muted [&_.node-actions]:mt-2 [&_.node-actions]:pt-1.5 [&_.node-actions]:border-t [&_.node-actions]:border-t-border-variant [&_.node-actions]:flex [&_.node-actions]:flex-nowrap [&_.node-actions]:items-center [&_.node-actions]:gap-1 [&_.node-action]:inline-flex [&_.node-action]:items-center [&_.node-action]:gap-1 [&_.node-action]:py-1 [&_.node-action]:px-1.5 [&_.node-action]:text-sm [&_.node-action]:font-medium [&_.node-action]:text-text [&_.node-action]:rounded-sm [&_.node-action]:no-underline [&_.node-action:hover]:text-text [&_.node-action:hover]:bg-surface [&_.node-action-ext]:ms-auto [&_.node-action-ext]:p-1 ${live ? "live" : ""} ${exp.archived ? "opacity-80" : ""}`}
       onMouseEnter={onNodeMouseEnter}
       onMouseLeave={hover.onMouseLeave}
     >
@@ -285,7 +330,7 @@ const ExpNode = memo(function ExpNode({ data }: NodeProps<ExpFlowNode>) {
         )}
       >
         <div className="node-eyebrow">
-          <span>{kind}</span>
+          <span>{exp.archived ? m.tree_archived() : kind}</span>
           <StatusBadge status={status ?? "idle"} />
         </div>
         <div className="node-head">
@@ -297,7 +342,7 @@ const ExpNode = memo(function ExpNode({ data }: NodeProps<ExpFlowNode>) {
         <div className="node-meta">
           <span>{m.tree_view_runs()}</span>
           {squares.length > 0 ? (
-            <span className="run-squares flex items-center gap-[3px]">
+            <span className="run-squares flex items-center gap-1">
               {squares.map((run) => (
                 <span
                   key={run.id}
@@ -313,7 +358,7 @@ const ExpNode = memo(function ExpNode({ data }: NodeProps<ExpFlowNode>) {
           {latestRun && <span>{timeAgo(latestRun.createdAt)}</span>}
         </div>
       </div>
-      {/* Direct view shortcuts — code always, logs once there's a run, artifacts always. */}
+      {/* Code always, logs once there's a run, artifacts always, charts once Trackio has them. */}
       <div className="node-actions" onClick={(e) => e.stopPropagation()}>
         {runs.length > 0 && (
           <button
@@ -323,7 +368,7 @@ const ExpNode = memo(function ExpNode({ data }: NodeProps<ExpFlowNode>) {
               onOpenView(exp.id, "terminal", intent),
             )}
           >
-            <Terminal size={13} />
+            <Terminal size={14} />
             {m.tree_view_logs()}
           </button>
         )}
@@ -334,7 +379,7 @@ const ExpNode = memo(function ExpNode({ data }: NodeProps<ExpFlowNode>) {
             onOpenCode(exp.id, exp.branchName, "files", intent),
           )}
         >
-          <FolderTree size={13} />
+          <FolderTree size={14} />
           {m.tree_view_code()}
         </button>
         <button
@@ -349,9 +394,21 @@ const ExpNode = memo(function ExpNode({ data }: NodeProps<ExpFlowNode>) {
           <Package size={13} />
           {m.tree_view_artifacts()}
         </button>
+        {hasTrackio && (
+          <button
+            className="node-action"
+            title={m.a11y_trackio_charts()}
+            {...tabOpenGestureHandlers<HTMLButtonElement>((intent) =>
+              onOpenView(exp.id, "trackio", intent),
+            )}
+          >
+            <ChartLine size={14} />
+            {m.experiment_overview_visualize()}
+          </button>
+        )}
         {/* Icon-only: labeled actions + the link overflow the card's fixed width. */}
         {githubOwner && githubRepo && <a
-          className="node-action node-action-ext"
+          className="node-action"
           title={m.a11y_open_on_github({ name: ltr(exp.branchName) })}
           aria-label={m.a11y_open_on_github({ name: ltr(exp.branchName) })}
           href={githubBranchUrl(githubOwner, githubRepo, exp.branchName)}
@@ -359,8 +416,9 @@ const ExpNode = memo(function ExpNode({ data }: NodeProps<ExpFlowNode>) {
           rel="noopener noreferrer"
           onClick={(e) => e.stopPropagation()}
         >
-          <GitHubMark size={13} />
+          <GitHubMark size={14} />
         </a>}
+        <ArchiveMenu id={exp.id} name={exp.slug} actions={actions} onArchive={onArchive} onDelete={onDelete} compact />
       </div>
       <Handle type="source" position={Position.Bottom} />
       {/* Node and card share one leave handler — React's enter/leave pairing
@@ -395,6 +453,41 @@ const ExpNode = memo(function ExpNode({ data }: NodeProps<ExpFlowNode>) {
   );
 });
 
+const ArchivedNode = memo(function ArchivedNode({ data }: NodeProps<ArchivedFlowNode>) {
+  useLocale();
+  const { rootId, count, onRestoreRegion } = data;
+  const [open, setOpen] = useState(false);
+  const triggerId = useId();
+  return (
+    <div className="archived-node w-40 h-11">
+      <Handle type="target" position={Position.Top} />
+      <DirectionProvider direction={typeof document !== "undefined" && document.documentElement.dir === "rtl" ? "rtl" : "ltr"}>
+        <Menu.Root open={open} onOpenChange={setOpen} triggerId={triggerId} modal={false}>
+          <Menu.Trigger
+            id={triggerId}
+            // XYFlow consumes mousedown before React's bubble handlers receive it.
+            onMouseDown={(event) => event.preventBaseUIHandler()}
+            onClick={(event) => { event.preventBaseUIHandler(); setOpen((value) => !value); }}
+            className="nodrag w-full h-full flex items-center justify-center gap-2 px-3 border border-border rounded-full bg-background text-text text-sm font-medium whitespace-nowrap transition-[background-color,border-color] duration-120 ease-standard hover:bg-surface hover:border-border-hover-strong">
+            <Archive size={16} className="shrink-0 text-subtext" aria-hidden="true" />
+            <span>{m.tree_archived_count({ count: fmtNumber(count) })}</span>
+          </Menu.Trigger>
+          <Menu.Portal>
+            <Menu.Positioner positionMethod="fixed" side="bottom" align="start" sideOffset={4} collisionPadding={4} className="z-70">
+              <Menu.Popup className="outline-none max-h-(--available-height) overflow-y-auto option-menu min-w-56 rounded-lg border border-border bg-background p-1.5 shadow-menu">
+                <Menu.Item nativeButton render={<MenuItem className="data-highlighted:bg-surface" />} onClick={() => onRestoreRegion(rootId)}>
+                  {count === 1 ? m.tree_restore_only() : m.tree_restore_archived_count({ count: fmtNumber(count) })}
+                </Menu.Item>
+              </Menu.Popup>
+            </Menu.Positioner>
+          </Menu.Portal>
+        </Menu.Root>
+      </DirectionProvider>
+      <Handle type="source" position={Position.Bottom} />
+    </div>
+  );
+});
+
 const ElidedNode = memo(function ElidedNode({ data }: NodeProps<ElidedFlowNode>) {
   useLocale();
   const { count, onShowProjectScope } = data;
@@ -404,7 +497,7 @@ const ElidedNode = memo(function ElidedNode({ data }: NodeProps<ElidedFlowNode>)
   // body is a single action.
   return (
     <div
-      className="elided-node w-37 h-11 flex items-center gap-2 py-1.5 px-2.5 border border-dashed border-border rounded-md bg-hover-faint text-muted text-sm font-medium text-start transition-[border-color,color] duration-120 ease-standard [&:hover]:border-text [&:hover]:text-text [&_.elided-node-label]:flex [&_.elided-node-label]:flex-col [&_.elided-node-label]:leading-[1.3] [&_.elided-node-sub]:text-muted"
+      className="elided-node w-37 h-11 flex items-center gap-2 py-1.5 px-2.5 border border-dashed border-border rounded-md bg-hover-faint text-muted text-sm font-medium text-start transition-[border-color,color] duration-120 ease-standard [&:hover]:border-border-hover-strong [&:hover]:text-text [&_.elided-node-label]:flex [&_.elided-node-label]:flex-col [&_.elided-node-label]:leading-snug [&_.elided-node-sub]:text-muted"
       role="button"
       tabIndex={0}
       title={m.tree_view_switch_to_entire_project_to_see_all_experiments()}
@@ -420,14 +513,14 @@ const ElidedNode = memo(function ElidedNode({ data }: NodeProps<ElidedFlowNode>)
       <Ellipsis size={14} />
       <span className="elided-node-label">
         {count === 1 ? m.tree_one_experiment() : m.tree_experiment_count({ count: fmtNumber(count) })}
-        <span className="elided-node-sub">{m.tree_view_other_tasks()}</span>
+        <span className="elided-node-sub">{m.tree_hidden_experiments()}</span>
       </span>
       <Handle type="source" position={Position.Bottom} />
     </div>
   );
 });
 
-const nodeTypes = { exp: ExpNode, elided: ElidedNode };
+const nodeTypes = { exp: ExpNode, archived: ArchivedNode, elided: ElidedNode };
 
 const defaultEdgeOptions = {
   type: "default", // bezier
@@ -439,17 +532,24 @@ const elidedEdgeStyle = { ...defaultEdgeOptions.style, strokeDasharray: "4 4" };
 
 export function TreeView({
   experiments,
+  archiveActions,
+  showArchived,
   runs,
   project,
   onOpenView,
   onOpenCode,
   onOpenArtifact,
+  onArchive,
+  onDelete,
   agentSessionId,
   onShowProjectScope,
+  onRestoreRegion,
   viewport,
   onViewportChange,
 }: {
   experiments: Experiment[];
+  archiveActions: Map<string, ArchiveActions>;
+  showArchived: boolean;
   runs: Run[];
   /** Owning project — supplies owner/repo for the GitHub branch links. */
   project: Project;
@@ -464,11 +564,14 @@ export function TreeView({
   ) => void;
   /** Open a project artifact file as a right-pane tab. */
   onOpenArtifact: (path: string, intent: TabOpenIntent) => void;
+  onArchive: (id: string, direction: "ancestors" | "descendants" | "only", archived: boolean) => void;
+  onDelete: (id: string) => void;
   /** Current task scope: show only this chat session's experiments, eliding the rest.
    * Null = Entire project scope (the whole forest). */
   agentSessionId: string | null;
-  /** Leave Current task scope (clicking an elided "…" pill). */
+  /** Leave Current task scope from an elided pill. */
   onShowProjectScope: () => void;
+  onRestoreRegion: (id: string) => void;
   /** Preserve the canvas transform while the experiments pane is unmounted. */
   viewport: Viewport | null;
   onViewportChange: (viewport: Viewport) => void;
@@ -492,11 +595,10 @@ export function TreeView({
 
     const nodes: FlowNode[] = [];
     const edges: Edge[] = [];
-    // Project scope (null session) accepts every node, so the elision pass is
-    // an identity transform and produces no pills.
     const isMine = (n: TreeNode) =>
       !agentSessionId || n.exp.chatSessionId === agentSessionId;
-    const roots = elideForeignRegions(buildForest(experiments), isMine);
+    const scopedRoots = elideHiddenRegions(buildForest(experiments), isMine);
+    const roots = showArchived ? scopedRoots : collapseArchivedRegions(scopedRoots);
     const slugById = new Map(experiments.map((e) => [e.id, e.slug]));
 
     function layout(node: DisplayNode, cx: number, y: number) {
@@ -520,14 +622,23 @@ export function TreeView({
             onOpenView,
             onOpenCode,
             onOpenArtifact,
+            onArchive,
+            onDelete,
+            actions: archiveActions.get(node.exp.id)!,
           },
         });
+      } else if (node.kind === "archived") {
+        nodes.push({
+          id: node.id,
+          type: "archived",
+          position: { x, y },
+          data: { rootId: node.rootId, count: node.count, onRestoreRegion },
+        });
       } else {
-        // Pills are shorter than cards; center them within the row.
         nodes.push({
           id: node.id,
           type: "elided",
-          position: { x, y: y + (NODE_H - ELIDED_H) / 2 },
+          position: { x, y },
           data: { count: node.count, onShowProjectScope },
         });
       }
@@ -538,14 +649,14 @@ export function TreeView({
       let childX = cx - totalW / 2;
       for (const child of node.children) {
         const cw = subtreeWidth(child);
-        const elided = node.kind === "elided" || child.kind === "elided";
+        const elided = node.kind !== "exp" || child.kind !== "exp" || node.exp.archived || child.exp.archived;
         edges.push({
           id: `e-${nodeId(node)}-${nodeId(child)}`,
           source: nodeId(node),
           target: nodeId(child),
           ...(elided ? { style: elidedEdgeStyle } : {}),
         });
-        layout(child, childX + cw / 2, y + NODE_H + GAP_Y);
+        layout(child, childX + cw / 2, y + nodeHeight(node) + (child.kind === "archived" ? ARCHIVED_GAP_Y : GAP_Y));
         childX += cw + GAP_X;
       }
     }
@@ -559,15 +670,20 @@ export function TreeView({
     return { nodes, edges };
   }, [
     experiments,
+    archiveActions,
+    showArchived,
     runs,
     onOpenView,
     onOpenCode,
     onOpenArtifact,
+    onArchive,
+    onDelete,
     project.githubOwner,
     project.githubRepo,
     project.githubEnabled,
     agentSessionId,
     onShowProjectScope,
+    onRestoreRegion,
   ]);
 
   if (experiments.length === 0) {
@@ -584,9 +700,7 @@ export function TreeView({
     return (
       <div className={EMPTY_STATE_CLASS_NAME}>
         <p className="empty-state-title">{m.tree_view_no_experiments_from_the_current_task_yet()}</p>
-        <p className="empty-state-hint">
-          {m.tree_view_ask_in_this_task_to_create_one_or()}
-        </p>
+        <p className="empty-state-hint">{m.tree_view_ask_in_this_task_to_create_one_or()}</p>
       </div>
     );
   }
@@ -594,7 +708,7 @@ export function TreeView({
   return (
     <TreeArtifactsContext.Provider value={artifactsValue}>
       <ReactFlow
-        className="[&_.react-flow\_\_node.react-flow\_\_node-exp.selectable]:cursor-default [&_.react-flow\_\_node.react-flow\_\_node-elided.selectable]:cursor-pointer [&_.react-flow\_\_handle]:opacity-0 [&_.react-flow\_\_handle]:pointer-events-none [&_.react-flow\_\_attribution]:hidden!"
+        className="[&_.react-flow\_\_node.react-flow\_\_node-exp.selectable]:cursor-default [&_.react-flow\_\_node.react-flow\_\_node-archived.selectable]:cursor-pointer [&_.react-flow\_\_node.react-flow\_\_node-elided.selectable]:cursor-pointer [&_.react-flow\_\_handle]:opacity-0 [&_.react-flow\_\_handle]:pointer-events-none [&_.react-flow\_\_attribution]:hidden!"
         // Saved viewports initialize on mount; a new scope needs its own canvas.
         key={agentSessionId ?? "project"}
         nodes={nodes}

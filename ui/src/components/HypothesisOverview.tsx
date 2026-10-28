@@ -46,7 +46,7 @@ export function HypothesisOverview({
           <h2 className="m-0 truncate text-sm font-semibold text-text" title={hypothesis.slug}>{ltr(hypothesis.slug)}</h2>
           {hypothesis.title && <p className="m-0 mt-1 text-sm text-text">{hypothesis.title}</p>}
         </div>
-        <IconButton title={m.hypothesis_close()} aria-label={m.hypothesis_close()} onClick={onClose}>
+        <IconButton aria-label={m.hypothesis_close()} onClick={onClose}>
           <X size={14} />
         </IconButton>
       </div>

@@ -16,6 +16,34 @@ orx exp run <expId>                    # launch on the configured default
 orx exp cancel <expId>                 # cancel the in-flight run
 ```
 
+## Inspect configuration and custom instructions first
+
+Before configuring compute or constructing a launch command:
+
+```sh
+orx compute status --json
+orx compute instructions show --json
+```
+
+`instructions show` returns the machine-wide `CUSTOM.md` content, absolute path,
+and revision. Missing or blank content means there are no custom instructions.
+Read the section for the selected backend/host, then its backend guide below.
+For configuration, connection tests, login, or instruction updates, read
+[references/configuration.md](references/configuration.md)
+(`orx skill compute/configuration` is the fallback).
+
+Usually leave `CUSTOM.md` empty. Add verified, consistently repeated bespoke
+compute instructions only when standard CLI settings and committed project
+scripts cannot express the workflow and the agent truly needs extra steps.
+Keep any such guidance short: working commands, environment paths, cluster
+constraints, and documentation links.
+Use `orx compute instructions set --file - --expected-revision <revision from show>`;
+never write the file directly with file-edit tools or shell redirects.
+Preserve the user's guidance; replace obsolete steps instead of appending run
+logs. Never store credentials or invent cluster commands. Read linked cluster
+instructions before using unfamiliar scheduler options. Instructions do not
+change the configured backend or authorize bypassing the launch contract.
+
 ## Universal launch contract
 
 - **Launch all experiment compute with `orx exp run`.** Never invoke provider
@@ -33,6 +61,29 @@ orx exp cancel <expId>                 # cancel the in-flight run
 - `--force` permits a deliberate concurrent run on the same experiment.
   Without it, `orx` rejects a launch while that node already has a run in
   flight.
+- Every run gets `ORX_RUN_ID`, `ORX_EXPERIMENT`, `ORX_EXPERIMENT_TITLE`,
+  `ORX_PARENT_EXPERIMENT` (when it has a parent), `ORX_COMMIT` and
+  `TRACKIO_PROJECT`. Saved environment variables reach every backend except
+  `hf`, which gets only the `ORX_*` and Trackio ones. To track metrics, log
+  with Trackio; orx shows its charts beside the run:
+  `trackio.init(project=os.environ.get("TRACKIO_PROJECT", <name>),
+  name=os.environ.get("ORX_RUN_ID"), group=os.environ.get("ORX_EXPERIMENT"),
+  config={"hypothesis": os.environ.get("ORX_EXPERIMENT_TITLE"), "parent":
+  os.environ.get("ORX_PARENT_EXPERIMENT"), "commit": os.environ.get("ORX_COMMIT"),
+  **hyperparameters})`. Keep that project and name, or orx cannot find the
+  run. The client reads `TRACKIO_SPACE_ID` or `TRACKIO_SERVER_URL` and its
+  token itself. With neither saved, only `local` runs show up in orx, and a
+  localhost URL only works on the `local` backend. Never print a token.
+- `orx metrics <runId> [<runId>…]` reads back what runs logged to Trackio,
+  wherever it went: per metric its first, last, min and max (with steps), the
+  mean over the last tenth, a sparkline, and sampled `step:value` points.
+  `--metric loss` filters, `--points 50` adds resolution, `--json` is
+  machine-readable. Read it while a run is live and after it ends, and pass the
+  parent experiment's run too to compare curves, not just final numbers.
+- `local`, `tinker`, `ssh` and `slurm` runs also get `TENSORBOARD_LOGDIR`, a
+  per-run directory; pass it as the trainer's `logging_dir`/`log_dir`. `orx
+  tensorboard <runId>` prints the command that opens it (not for SSH
+  container runs).
 
 ## Resolve the backend, then read one guide
 
@@ -60,6 +111,11 @@ always requires `references/k8s.md` before creating or editing the manifest.
 If the installed reference cannot be read, `orx skill compute/<backend>` prints
 the same canonical document.
 
+For Slurm, `--cpus` and `--mem` request `#SBATCH --cpus-per-task` and
+`#SBATCH --mem`; omitting either uses the configured Slurm default, then the
+partition default. Read
+`references/slurm.md` before choosing values.
+
 ## Waiting on runs — `orx exp wait`
 
 Block until a run changes state when you want to act as soon as it finishes:
@@ -78,8 +134,10 @@ orx exp wait <expId> --interval 10 --timeout 3600
 - When nothing is in flight, project wait returns `drained: no runs in flight`.
 - The default interval is 5 seconds and timeout is 1800 seconds. Timeout exits
   non-zero and means nothing changed yet, not that the run failed.
+- Cancel only a run that is broken or no longer wanted; after a wait timeout,
+  wait again instead of cancelling.
 - Failed runs include a `reason:` line. Provider-capacity failures are often
-  retryable; failures after startup require reading `orx logs <runId>`.
+  retryable; failures after startup require reading the file located by `orx logs <runId>`.
 - A failed run is not a new node. Repair and relaunch the same experiment as
   described by `orx-experiment-tree`.
 
@@ -87,8 +145,10 @@ orx exp wait <expId> --interval 10 --timeout 3600
 
 After launching, use `orx exp wake <expId>` when you want to end the turn and
 resume after that run succeeds or fails. Wake-up is opt-in, fires only for
-`done` or `failed`, and waits behind queued user messages. Use either wait or
-wake for a run, not both.
+`done` or `failed`, and waits behind queued user messages. If orx cannot
+monitor a live Slurm run for over a minute, it tells you once per outage; the
+final wake-up comes once orx can see the run finish. Use either wait or wake
+for a run, not both.
 
 ## Sizing compute
 

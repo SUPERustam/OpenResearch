@@ -2,7 +2,7 @@ import { WorkspaceEmptyState } from "./WorkspaceEmptyState";
 import { m } from "../paraglide/messages.js";
 import { ltr } from "../i18n";
 import { FlaskConical, CircleStop, FolderTree, GitBranch, Package, Terminal } from "lucide-react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   fmtNumber,
@@ -19,34 +19,76 @@ import { StatusBadge } from "./StatusBadge";
 import { ExperimentArtifactsMenu } from "./ExperimentArtifactsMenu";
 import { tabOpenGestureHandlers, type TabOpenIntent } from "../tabPreview";
 import { Button } from "./ui";
+import { ArchiveMenu, type ArchiveActions } from "./ArchiveMenu";
+import { Rail, type HistoryOrder, type Placed } from "./ExperimentLineage";
+import { buildHistoryNodes, laneCount, layoutChronological, layoutLineage } from "./experimentLineageModel";
+
+const NO_HIGHLIGHT = new Set<string>();
 
 const EMPTY_ARTIFACT_ENTRIES: ArtifactEntry[] = [];
 
 export function ExperimentsTable({
   runs,
   experiments,
+  showLineage,
+  order,
+  archiveActions,
   emptyHint,
   projectId,
   onOpen,
   onOpenLogs,
   onOpenCode,
   onOpenArtifact,
+  onArchive,
+  onDelete,
   onCancel,
 }: {
   runs: Run[];
   experiments: Experiment[];
+  showLineage: boolean;
+  order: HistoryOrder;
+  archiveActions: Map<string, ArchiveActions>;
   emptyHint?: string;
   projectId: string;
   onOpen: (experiment: Experiment, intent: TabOpenIntent) => void;
   onOpenLogs: (experimentId: string, runId: string, intent: TabOpenIntent) => void;
   onOpenCode: (experimentId: string, intent: TabOpenIntent) => void;
   onOpenArtifact: (path: string, intent: TabOpenIntent) => void;
+  onArchive: (id: string, direction: "ancestors" | "descendants" | "only", archived: boolean) => void;
+  onDelete: (id: string) => void;
   onCancel: (runId: string) => Promise<void>;
 }) {
   const artifactsQuery = useQuery(getArtifactsQuery(projectId));
   const entries = artifactsQuery.data?.entries ?? EMPTY_ARTIFACT_ENTRIES;
   const [pendingCancellation, setPendingCancellation] = useState<ReadonlySet<string>>(new Set());
   const [cancelError, setCancelError] = useState<string | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const [placed, setPlaced] = useState<Placed[]>([]);
+  const rows = useMemo(() => {
+    const group = { key: "table", title: "", nodes: buildHistoryNodes(experiments, runs) };
+    return order === "lineage" ? layoutLineage(group) : layoutChronological(group, order === "newest");
+  }, [experiments, runs, order]);
+  const railWidth = 15 + 14 * laneCount(rows) + 8;
+  const lastPlaced = placed.at(-1);
+
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const elements = [...list.children].filter((child) => child instanceof HTMLDivElement);
+    const measure = () => {
+      setPlaced(rows.flatMap((row, index) => {
+        const element = elements[index];
+        if (!element) return [];
+        const top = element.offsetTop;
+        const height = element.offsetHeight;
+        return [{ row, top, height, y: top + height / 2 }];
+      }));
+    };
+    const observer = new ResizeObserver(measure);
+    for (const element of elements) observer.observe(element);
+    measure();
+    return () => observer.disconnect();
+  }, [rows]);
   const runsByExperiment = new Map<string, Run[]>();
   for (const run of runs) {
     const experimentRuns = runsByExperiment.get(run.experimentId);
@@ -57,13 +99,7 @@ export function ExperimentsTable({
     experimentRuns.sort((a, b) => b.createdAt - a.createdAt);
   }
 
-  const sortedExperiments = [...experiments].sort((a, b) => {
-    const aActivity = runsByExperiment.get(a.id)?.[0]?.createdAt ?? a.createdAt;
-    const bActivity = runsByExperiment.get(b.id)?.[0]?.createdAt ?? b.createdAt;
-    return bActivity - aActivity;
-  });
-
-  if (sortedExperiments.length === 0) {
+  if (rows.length === 0) {
     return (
       <WorkspaceEmptyState
         icon={FlaskConical}
@@ -95,8 +131,11 @@ export function ExperimentsTable({
           {m.experiments_table_stop_failed()} {cancelError}
         </div>
       )}
-      <div className="experiments-table w-full text-sm bg-background" role="list" aria-label={m.experiments_table_experiments()}>
-        {sortedExperiments.map((experiment) => {
+      <div ref={listRef} className="experiments-table relative w-full text-sm bg-background" role="list" aria-label={m.experiments_table_experiments()}>
+        {showLineage && <Rail placed={placed} height={lastPlaced ? lastPlaced.top + lastPlaced.height : 0} path={NO_HIGHLIGHT} selectedId={null} />}
+        {rows.map((row) => {
+          if (row.kind !== "experiment") return null;
+          const experiment = row.node.experiment;
           const experimentRuns = runsByExperiment.get(experiment.id) ?? [];
           const latestRun = experimentRuns[0] ?? null;
           const liveRun = experimentRuns.find(
@@ -117,6 +156,7 @@ export function ExperimentsTable({
           return (
             <ExperimentTableRow
               key={experiment.id}
+              style={{ paddingLeft: showLineage ? railWidth + 12 : 20 }}
               experiment={experiment}
               experimentRuns={experimentRuns}
               latestRun={latestRun}
@@ -126,10 +166,13 @@ export function ExperimentsTable({
               status={status}
               entries={entries}
               artifactsPending={artifactsQuery.isPending}
+              archiveActions={archiveActions.get(experiment.id)!}
               onOpen={onOpen}
               onOpenLogs={onOpenLogs}
               onOpenCode={onOpenCode}
               onOpenArtifact={onOpenArtifact}
+              onArchive={onArchive}
+              onDelete={onDelete}
               onCancelRun={requestCancel}
             />
           );
@@ -149,10 +192,14 @@ function ExperimentTableRow({
   status,
   entries,
   artifactsPending,
+  style,
   onOpen,
   onOpenLogs,
   onOpenCode,
   onOpenArtifact,
+  onArchive,
+  onDelete,
+  archiveActions,
   onCancelRun,
 }: {
   experiment: Experiment;
@@ -164,10 +211,14 @@ function ExperimentTableRow({
   status: RunDisplayStatus | "idle";
   entries: ArtifactEntry[];
   artifactsPending: boolean;
+  style?: CSSProperties;
   onOpen: (experiment: Experiment, intent: TabOpenIntent) => void;
   onOpenLogs: (experimentId: string, runId: string, intent: TabOpenIntent) => void;
   onOpenCode: (experimentId: string, intent: TabOpenIntent) => void;
   onOpenArtifact: (path: string, intent: TabOpenIntent) => void;
+  onArchive: (id: string, direction: "ancestors" | "descendants" | "only", archived: boolean) => void;
+  onDelete: (id: string) => void;
+  archiveActions: ArchiveActions;
   onCancelRun: (runId: string) => void;
 }) {
   const files = useMemo(
@@ -187,6 +238,7 @@ function ExperimentTableRow({
 
   return (
     <div
+      style={style}
       className="experiment-table-group grid grid-cols-[minmax(0,_1fr)_auto] [grid-template-areas:'name_meta'_'actions_actions'] gap-x-8 items-center py-4 px-5 gap-y-[7px] border-b border-b-divider-subtle bg-background cursor-pointer [&:hover]:bg-canvas [&:last-child]:border-b-0 [@container((max-width:_560px))]:grid-cols-[minmax(0,_1fr)_auto] [@container((max-width:_560px))]:gap-x-3.5 [@container((max-width:_560px))]:gap-y-[9px] [@container((max-width:_400px))]:grid-cols-[minmax(0,_1fr)] [@container((max-width:_400px))]:[grid-template-areas:'name'_'meta'_'actions']"
       role="listitem"
       onClick={() => onOpen(experiment, "preview")}
@@ -207,6 +259,7 @@ function ExperimentTableRow({
         >
           {experiment.title || experiment.slug}
         </button>
+        {experiment.archived && <span className="text-muted text-xs">{m.tree_archived()}</span>}
         <span className="experiment-table-subtitle flex items-center min-w-0 gap-1.5 mt-1 overflow-hidden text-subtext text-sm [&_>_svg]:shrink-0 [&_code]:min-w-0 [&_code]:overflow-hidden [&_code]:text-ellipsis [&_code]:whitespace-nowrap" title={experiment.branchName}>
           <GitBranch size={14} aria-hidden="true" />
           <code>{experiment.branchName}</code>
@@ -234,7 +287,7 @@ function ExperimentTableRow({
         <Button
           size="small"
           disabled={!logsRun}
-          title={logsRun ? m.experiments_open_logs() : m.experiments_no_runs_yet()}
+          aria-label={logsRun ? m.experiments_open_logs() : m.experiments_no_runs_yet()}
           {...tabOpenGestureHandlers<HTMLButtonElement>((intent) => {
             if (logsRun) onOpenLogs(experiment.id, logsRun.id, intent);
           }, { stopPropagation: true })}
@@ -244,7 +297,7 @@ function ExperimentTableRow({
         </Button>
         <Button
           size="small"
-          title={m.a11y_browse_code_on({ branch: ltr(experiment.branchName) })}
+          aria-label={m.a11y_browse_code_on({ branch: ltr(experiment.branchName) })}
           {...tabOpenGestureHandlers<HTMLButtonElement>((intent) =>
             onOpenCode(experiment.id, intent),
           { stopPropagation: true })}
@@ -256,7 +309,7 @@ function ExperimentTableRow({
           <Button
             type="button"
             size="small"
-            title={m.experiments_table_open_artifacts()}
+            aria-label={m.experiments_table_open_artifacts()}
             aria-haspopup="menu"
             aria-expanded={artifactsOpen}
             onClick={() => setArtifactsOpen((open) => !open)}
@@ -271,13 +324,20 @@ function ExperimentTableRow({
             variant="danger"
             className="[@container((max-width:_560px))]:ms-auto"
             disabled={cancelling}
-            title={cancelling ? m.experiments_stop_requested() : m.experiments_stop_run()}
+            aria-label={cancelling ? m.experiments_stop_requested() : m.experiments_stop_run()}
             onClick={() => onCancelRun(liveRun.id)}
           >
             <CircleStop size={15} />
             {cancelling ? m.common_stopping() : m.common_stop()}
           </Button>
         )}
+        <ArchiveMenu
+          id={experiment.id}
+          name={experiment.title || experiment.slug}
+          actions={archiveActions}
+          onArchive={onArchive}
+          onDelete={onDelete}
+        />
         {artifactsOpen && (
           <ExperimentArtifactsMenu
             triggerRef={artifactsBtnRef}

@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { syncDesktopTitlebar } from "./desktopTitlebar";
 
 export type ThemePreference = "system" | "light" | "dark";
 
@@ -28,6 +29,7 @@ function resolveTheme(pref: ThemePreference): "light" | "dark" {
 
 function applyResolvedTheme(): void {
   document.documentElement.dataset.theme = resolveTheme(preference);
+  syncDesktopTitlebar(preference);
 }
 
 export function setThemePreference(next: ThemePreference): void {
@@ -60,6 +62,21 @@ applyResolvedTheme();
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
+}
+
+function subscribeResolved(listener: () => void): () => void {
+  const observer = new MutationObserver(listener);
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  return () => observer.disconnect();
+}
+
+/** The theme actually showing, including "system" resolved against the OS. */
+export function useResolvedTheme(): "light" | "dark" {
+  return useSyncExternalStore(
+    subscribeResolved,
+    () => (document.documentElement.dataset.theme === "dark" ? "dark" : "light"),
+    () => "light",
+  );
 }
 
 /** Current theme preference, reflected on <html data-theme> and persisted. */

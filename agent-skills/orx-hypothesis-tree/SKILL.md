@@ -91,4 +91,4 @@ Deleting a hypothesis fails while it still has children. Delete or reparent the 
 
 ## What stays on the experiment tree
 
-Frozen nodes, the run command, repair, and promotion do not move. Load `orx-experiment-tree` before creating, launching, or editing experiment nodes. Load `orx-evidence` before judging a run, and `orx-lit-review` before the retrieval that becomes an internet source.
+Frozen nodes, the run command, repair, and promotion do not move. Load `orx-experiment-tree` before creating, launching, or editing experiment nodes. Load `orx-results` before judging a run, and `orx-lit-review` before the retrieval that becomes an internet source.

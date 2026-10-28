@@ -49,6 +49,99 @@ const MODELS_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub struct Cursor;
 
+impl Cursor {
+    /// `snapshot` skips `cursor_model_list` and leaves models empty until the
+    /// background full pass; the account-details lookup stays deferred.
+    /// It also skips the `--version` and `agent status` spawns — install is
+    /// discovery alone, and auth reads `CURSOR_API_KEY` instead of asking the
+    /// CLI (`authInfo` feeds `account` only; it survives `agent logout`).
+    async fn detect_at(&self, snapshot: bool) -> Option<HarnessInfo> {
+        let mut info = HarnessInfo::new(self.id(), self.name());
+        let mut spec = None;
+        if snapshot {
+            super::detect::record_selected(
+                &mut info,
+                true,
+                "cursor",
+                find_cursor,
+                find_cursor_working(),
+            )
+            .await;
+        } else {
+            // A shim that resolves to a bundled node entry is already proven
+            // installed — the versions-dir name is the version, so selection
+            // needs no `--version` spawn at all. Only an unresolvable shim
+            // (or a plain binary) falls back to the probe sweep. The PATH/dir
+            // scan itself costs seconds under load, so the pick the snapshot
+            // pass remembered is tried before `cursor_candidates()` runs.
+            let mut candidates: Option<Vec<PathBuf>> = None;
+            let shim_pick = super::detect::remembered_bin("cursor")
+                .and_then(|b| bundled_launch(&b).map(|l| (b, l)))
+                .or_else(|| {
+                    let discovered = cursor_candidates();
+                    let pick = super::detect::selected_bin("cursor", discovered.clone())
+                        .and_then(|b| bundled_launch(&b).map(|l| (b, l)))
+                        .or_else(|| {
+                            discovered
+                                .iter()
+                                .find_map(|c| bundled_launch(c).map(|l| (c.clone(), l)))
+                        });
+                    candidates = Some(discovered);
+                    pick
+                });
+            let (selected, probes) = match shim_pick {
+                Some((bin, launch)) => {
+                    super::detect::remember_selected("cursor", &bin);
+                    let probes = cursor_spec_probes(bin.clone()).await;
+                    (
+                        Some((bin, super::detect::BinProbe::Answered(launch.version))),
+                        Some(probes),
+                    )
+                }
+                None => {
+                    super::detect::select_and_speculate(
+                        "cursor",
+                        candidates.unwrap_or_else(cursor_candidates),
+                        None,
+                        cursor_spec_probes,
+                    )
+                    .await
+                }
+            };
+            if let Some((bin, probe)) = selected {
+                info.record_bin(&bin, probe);
+            }
+            spec = probes;
+        }
+        let (status, models) = spec.unwrap_or((None, None));
+        if info.installed && !info.install_broken {
+            apply_auth(&mut info, status.as_ref());
+        }
+
+        // A recorded `authInfo` email is deliberately not promoted to
+        // `authenticated` — `agent logout` leaves it behind; it feeds
+        // `account` only.
+        info.agent_ready = info.ready();
+        if info.agent_ready {
+            if models.is_none() && !snapshot {
+                info.agent_note = Some("Could not load Cursor models. Re-check this harness or update Cursor; the CLI default model is still available.".to_string());
+            }
+            info = info.with_models(models.unwrap_or_default());
+        } else if info.install_broken {
+            info.agent_note = Some(info.broken_note(CURSOR_REINSTALL));
+        } else if info.installed {
+            info.agent_note =
+                Some("Sign in with `agent login`, then re-check this harness.".to_string());
+        } else {
+            info.agent_note = Some(
+                "Install Cursor CLI with `curl https://cursor.com/install -fsS | bash`, then sign in with `agent login`."
+                    .to_string(),
+            );
+        }
+        Some(info)
+    }
+}
+
 #[async_trait]
 impl Harness for Cursor {
     fn id(&self) -> &'static str {
@@ -63,39 +156,16 @@ impl Harness for Cursor {
         true
     }
 
-    async fn detect(&self) -> Option<HarnessInfo> {
-        let mut info = HarnessInfo::new(self.id(), self.name());
-        if let Some((bin, probe)) = find_cursor_working().await {
-            info.record_bin(&bin, probe);
-        }
-        if info.installed && !info.install_broken {
-            let bin = info.bin_path.as_deref().map(Path::new);
-            let status = match bin {
-                Some(bin) => cursor_command_json(bin, &["status", "--format", "json"]).await,
-                None => None,
-            };
-            apply_auth(&mut info, status.as_ref());
-        }
+    fn supports_compaction(&self) -> bool {
+        true
+    }
 
-        info.agent_ready = info.ready();
-        if info.agent_ready {
-            let models = match info.bin_path.as_deref().map(Path::new) {
-                Some(bin) => cursor_model_list(bin).await,
-                None => None,
-            };
-            info = info.with_models(models.unwrap_or_else(fallback_models));
-        } else if info.install_broken {
-            info.agent_note = Some(info.broken_note(CURSOR_REINSTALL));
-        } else if info.installed {
-            info.agent_note =
-                Some("Sign in with `agent login`, then re-check this harness.".to_string());
-        } else {
-            info.agent_note = Some(
-                "Install Cursor CLI with `curl https://cursor.com/install -fsS | bash`, then sign in with `agent login`."
-                    .to_string(),
-            );
-        }
-        Some(info)
+    async fn detect(&self) -> Option<HarnessInfo> {
+        self.detect_at(false).await
+    }
+
+    async fn detect_snapshot(&self) -> Option<HarnessInfo> {
+        self.detect_at(true).await
     }
 
     async fn run_turn(&self, ctx: &mut TurnCtx) -> TurnResult {
@@ -105,8 +175,9 @@ impl Harness for Cursor {
             .map_err(|error| TurnFailure::adapter(error, ctx.delivery_state()))
     }
 
-    async fn one_shot(&self, request: OneShot<'_>) -> Option<String> {
-        cursor_one_shot(&find_cursor()?, request).await
+    async fn one_shot(&self, request: OneShot<'_>) -> Result<String> {
+        let bin = find_cursor().ok_or_else(|| anyhow!("{} is not installed", self.name()))?;
+        cursor_one_shot(&bin, request).await
     }
 
     fn options(&self) -> HarnessOptions {
@@ -159,13 +230,8 @@ impl Harness for Cursor {
         Some(native_store::cursor_home(NativeStore::Legacy))
     }
 
-    fn skill_target(&self) -> Option<PathBuf> {
-        Some(
-            self.config_home()?
-                .join("skills")
-                .join("orx")
-                .join("SKILL.md"),
-        )
+    fn native_skill_roots(&self) -> Vec<PathBuf> {
+        vec![native_store::cursor_skills_dir()]
     }
 
     fn skill_shim(&self) -> Option<&'static str> {
@@ -182,7 +248,7 @@ impl Harness for Cursor {
 /// generic name, so a hit is only accepted when the path (or the symlink it
 /// resolves to) names Cursor.
 fn cursor_candidates() -> Vec<PathBuf> {
-    let drops = dirs::home_dir()
+    let drop_dirs: Vec<PathBuf> = dirs::home_dir()
         .map(|home| home.join(".local").join("bin"))
         .into_iter()
         .chain(
@@ -191,17 +257,31 @@ fn cursor_candidates() -> Vec<PathBuf> {
                 .flatten()
                 .map(|dir| dir.join("cursor-agent")),
         )
-        .flat_map(|dir| {
-            [
-                find_in_dir(&dir, "cursor-agent"),
-                find_in_dir(&dir, "agent").filter(|path| looks_like_cursor(path)),
-            ]
-        })
-        .flatten();
-    find_on_path("cursor-agent")
+        .collect();
+    let mut cursor_agents: Vec<PathBuf> = find_on_path("cursor-agent").into_iter().collect();
+    let mut agents: Vec<PathBuf> = Vec::new();
+    for dir in drop_dirs {
+        cursor_agents.extend(find_in_dir(&dir, "cursor-agent"));
+        agents.extend(find_in_dir(&dir, "agent"));
+    }
+    agents.extend(find_on_path("agent"));
+    // `agent` is the installer's alias binary in the same directory — where a
+    // `cursor-agent` sibling exists, probing both doubles the sweep.
+    let canon = |dir: &Path| crate::paths::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    let homes: std::collections::HashSet<PathBuf> = cursor_agents
+        .iter()
+        .filter_map(|path| path.parent())
+        .map(canon)
+        .collect();
+    cursor_agents
         .into_iter()
-        .chain(find_on_path("agent").filter(|path| looks_like_cursor(path)))
-        .chain(drops)
+        .chain(agents.into_iter().filter(|path| {
+            looks_like_cursor(path)
+                && !path
+                    .parent()
+                    .map(canon)
+                    .is_some_and(|dir| homes.contains(&dir))
+        }))
         .map(resolve_symlinks)
         .collect()
 }
@@ -225,9 +305,108 @@ fn looks_like_cursor(path: &Path) -> bool {
         || crate::paths::canonicalize(path).is_ok_and(|real| mentions_cursor(&real))
 }
 
-fn apply_auth(info: &mut HarnessInfo, status: Option<&Value>) {
-    let api = api_key("CURSOR_API_KEY");
-    let logged_in = status.and_then(|value| {
+/// The real entry point a Windows `cursor-agent.cmd` delegates to. The shim
+/// spawns cmd → powershell → node just to resolve a `versions/` dir — two
+/// extra processes on every probe — so detection resolves that chain itself
+/// and spawns `node.exe index.js` directly. `version` is the versions-dir
+/// name, which is the same string `--version` prints, so a resolved shim
+/// needs no version probe either.
+struct BundledLaunch {
+    node: PathBuf,
+    index: PathBuf,
+    version: Option<String>,
+}
+
+/// Resolve a cursor-agent `.cmd` shim to its bundled node entry, mirroring
+/// `cursor-agent.ps1`: a `node.exe`/`index.js` next to the script wins; else
+/// the newest `versions/<date>-<hash>` dir. Returns `None` for non-shim
+/// binaries and stale launchers whose versions dir is gone.
+fn bundled_launch(bin: &Path) -> Option<BundledLaunch> {
+    if bin
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_none_or(|e| !e.eq_ignore_ascii_case("cmd"))
+    {
+        return None;
+    }
+    let dir = bin.parent()?;
+    let node = dir.join("node.exe");
+    let index = dir.join("index.js");
+    if node.exists() && index.exists() {
+        return Some(BundledLaunch {
+            node,
+            index,
+            version: None,
+        });
+    }
+    let best = std::fs::read_dir(dir.join("versions"))
+        .ok()?
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            version_dir_key(&name).map(|key| (key, name, entry.path()))
+        })
+        .max_by_key(|(key, _, _)| *key)?;
+    let node = best.2.join("node.exe");
+    let index = best.2.join("index.js");
+    (node.exists() && index.exists()).then_some(BundledLaunch {
+        node,
+        index,
+        version: Some(best.1),
+    })
+}
+
+/// `YYYY.MM.DD(-HH-MM-SS)?-<hex>` → a sortable key, matching the version-dir
+/// naming `cursor-agent.ps1` parses (its sort key is the padded date; the
+/// optional timestamp only breaks same-day ties here).
+fn version_dir_key(name: &str) -> Option<(u64, u64)> {
+    let (head, hash) = name.rsplit_once('-')?;
+    if hash.is_empty()
+        || !hash
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    {
+        return None;
+    }
+    let mut parts = head.split('-');
+    let mut date = parts.next()?.split('.');
+    let y: u64 = date.next()?.parse().ok()?;
+    let m: u64 = date.next()?.parse().ok()?;
+    let d: u64 = date.next()?.parse().ok()?;
+    if date.next().is_some() || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    let time: u64 = match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (Some(h), Some(mi), Some(s), None) => format!("{}{}{}", h, mi, s).parse().ok()?,
+        (None, None, None, None) => 0,
+        _ => return None,
+    };
+    Some((y * 10000 + m * 100 + d, time))
+}
+
+/// The command to spawn for a candidate — the bundled node entry when the
+/// shim resolves, else the candidate itself. Mirrors the shim's own env:
+/// `NODE_COMPILE_CACHE` (its reason for existing — node startup is the
+/// dominant probe cost) and `CURSOR_INVOKED_AS`.
+fn cursor_command(bin: &Path) -> Command {
+    if let Some(launch) = bundled_launch(bin) {
+        let mut cmd = Command::new(launch.node);
+        cmd.arg(launch.index);
+        if let Some(name) = bin.file_name() {
+            cmd.env("CURSOR_INVOKED_AS", name);
+        }
+        if let Some(local) = dirs::data_local_dir() {
+            cmd.env("NODE_COMPILE_CACHE", local.join("cursor-compile-cache"));
+        }
+        return cmd;
+    }
+    Command::new(bin)
+}
+
+/// The `status` payload's login verdict, in either shape the CLI reports.
+fn status_logged_in(status: Option<&Value>) -> Option<bool> {
+    status.and_then(|value| {
         value
             .get("isAuthenticated")
             .and_then(Value::as_bool)
@@ -237,7 +416,12 @@ fn apply_auth(info: &mut HarnessInfo, status: Option<&Value>) {
                     .and_then(Value::as_str)
                     .map(|status| status.eq_ignore_ascii_case("authenticated"))
             })
-    });
+    })
+}
+
+fn apply_auth(info: &mut HarnessInfo, status: Option<&Value>) {
+    let api = api_key("CURSOR_API_KEY");
+    let logged_in = status_logged_in(status);
     if api.is_some() {
         info.authenticated = true;
         info.auth_state = HarnessAuthState::Ready;
@@ -262,7 +446,7 @@ pub(crate) async fn account_details(bin: &Path) -> Option<Value> {
 }
 
 async fn cursor_command_json(bin: &Path, args: &[&str]) -> Option<Value> {
-    let mut cmd = Command::new(bin);
+    let mut cmd = cursor_command(bin);
     cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -270,15 +454,43 @@ async fn cursor_command_json(bin: &Path, args: &[&str]) -> Option<Value> {
         .kill_on_drop(true);
     prepare_env(&mut cmd);
     cmd.env("NO_COLOR", "1");
-    let out = tokio::time::timeout(AUTH_STATUS_TIMEOUT, cmd.output())
-        .await
-        .ok()?
+    let out = super::detect::detect_spawn_output_timed(cmd, AUTH_STATUS_TIMEOUT)
+        .await?
         .ok()?;
     serde_json::from_slice(&out.stdout).ok()
 }
 
-async fn cursor_model_list(bin: &Path) -> Option<Vec<ModelInfo>> {
-    let mut cmd = Command::new(bin);
+/// The Full pass's probes on one binary. An API key already proves auth, so
+/// `status` and the multi-second `models` catalog child run concurrently.
+/// Without one, `status` is the auth oracle and `models` only runs on a
+/// logged-in verdict — racing it would spend a spawn the other harnesses'
+/// probes need the CPU for.
+async fn cursor_spec_probes(bin: PathBuf) -> (Option<Value>, Option<Vec<ModelInfo>>) {
+    let status_probe = || {
+        super::detect::timed_probe(
+            "cursor",
+            "status",
+            cursor_command_json(&bin, &["status", "--format", "json"]),
+        )
+    };
+    if api_key("CURSOR_API_KEY").is_some() {
+        let (status, models) = tokio::join!(
+            status_probe(),
+            super::detect::timed_probe("cursor", "models", cursor_model_list(bin.clone())),
+        );
+        return (status, models);
+    }
+    let status = status_probe().await;
+    let models = if status_logged_in(status.as_ref()) == Some(true) {
+        super::detect::timed_probe("cursor", "models", cursor_model_list(bin.clone())).await
+    } else {
+        None
+    };
+    (status, models)
+}
+
+async fn cursor_model_list(bin: PathBuf) -> Option<Vec<ModelInfo>> {
+    let mut cmd = cursor_command(&bin);
     cmd.args(["models"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -286,9 +498,8 @@ async fn cursor_model_list(bin: &Path) -> Option<Vec<ModelInfo>> {
         .kill_on_drop(true);
     prepare_env(&mut cmd);
     cmd.env("NO_COLOR", "1");
-    let out = tokio::time::timeout(MODELS_TIMEOUT, cmd.output())
-        .await
-        .ok()?
+    let out = super::detect::detect_spawn_output_timed(cmd, MODELS_TIMEOUT)
+        .await?
         .ok()?;
     if !out.status.success() {
         return None;
@@ -296,10 +507,6 @@ async fn cursor_model_list(bin: &Path) -> Option<Vec<ModelInfo>> {
     let text = String::from_utf8_lossy(&out.stdout);
     let parsed = parse_cursor_model_list(&text);
     (!parsed.is_empty()).then_some(parsed)
-}
-
-fn fallback_models() -> Vec<ModelInfo> {
-    vec![ModelInfo::new("auto").with_label(Some("Auto"), None)]
 }
 
 // `agent models` lists `id - display name`, followed by a usage tip.
@@ -364,7 +571,7 @@ fn cursor_exit_detail(status: std::process::ExitStatus, log: &Path) -> String {
     })
 }
 
-async fn cursor_one_shot(bin: &Path, request: OneShot<'_>) -> Option<String> {
+async fn cursor_one_shot(bin: &Path, request: OneShot<'_>) -> Result<String> {
     let message = format!("{}\n\n{}", request.system, request.prompt);
     let mut cmd = Command::new(bin);
     cmd.args([
@@ -382,30 +589,35 @@ async fn cursor_one_shot(bin: &Path, request: OneShot<'_>) -> Option<String> {
     }
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .kill_on_drop(true)
         .current_dir(std::env::temp_dir());
     prepare_env(&mut cmd);
     let cursor_home =
         tokio::task::spawn_blocking(|| native_store::prepare_cursor(NativeStore::Isolated))
-            .await
-            .ok()?
-            .ok()?;
+            .await??;
     cmd.env("CURSOR_CONFIG_DIR", &cursor_home);
     cmd.env("CURSOR_DATA_DIR", &cursor_home);
     cmd.env("NO_COLOR", "1");
     let out = tokio::time::timeout(request.timeout, async {
-        let mut child = cmd.spawn().ok()?;
-        send_prompt(&mut child, &message).await.ok()?;
-        child.wait_with_output().await.ok()
+        let mut child = cmd.spawn()?;
+        send_prompt(&mut child, &message).await?;
+        Ok::<_, crate::error::Error>(child.wait_with_output().await?)
     })
     .await
-    .ok()??;
+    .map_err(|_| anyhow!("timed out after {}s", request.timeout.as_secs()))??;
     if !out.status.success() {
-        return None;
+        let detail = cursor_cli_error(&String::from_utf8_lossy(&out.stderr));
+        return Err(match detail {
+            Some(detail) => anyhow!("{}", super::one_line(&detail, 300)),
+            None => super::one_shot_exit_error(out.status, &[&out.stdout]),
+        });
     }
     let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (!text.is_empty()).then_some(text)
+    if text.is_empty() {
+        return Err(anyhow!("returned no reply"));
+    }
+    Ok(text)
 }
 
 async fn send_prompt(child: &mut tokio::process::Child, prompt: &str) -> Result<()> {
@@ -581,8 +793,33 @@ async fn run_turn(ctx: &mut TurnCtx) -> Result<()> {
     Ok(())
 }
 
+/// A success ran the init model even without output or usage; an error without usage did not.
+fn result_usage(result: &Value, is_error: bool) -> Option<crate::store::TokenUsage> {
+    result
+        .get("usage")
+        .map(cursor_native_usage)
+        .or_else(|| (!is_error).then(crate::store::TokenUsage::default))
+}
+
+fn cursor_native_usage(usage: &Value) -> crate::store::TokenUsage {
+    let field = |key| usage.get(key).and_then(Value::as_u64);
+    crate::store::TokenUsage {
+        input_tokens: field("inputTokens")
+            .and_then(|input| input.checked_add(field("cacheReadTokens")?))
+            .and_then(|input| input.checked_add(field("cacheWriteTokens")?)),
+        output_tokens: field("outputTokens"),
+        cache_read_tokens: field("cacheReadTokens"),
+        cache_write_tokens: field("cacheWriteTokens"),
+        reasoning_tokens: None,
+    }
+}
+
 #[derive(Default)]
 struct TurnState {
+    /// Cursor's `system/init` model label (`Auto` included), announced before the request.
+    init_model: Option<String>,
+    /// The request produced output, so `init_model` names an execution.
+    executed: bool,
     native_session_id: Option<String>,
     text_part_id: Option<String>,
     reasoning_part_id: Option<String>,
@@ -597,7 +834,25 @@ fn apply_event(ctx: &mut TurnCtx, state: &mut TurnState, event: &Value) -> bool 
     if let Some(sid) = event.get("session_id").and_then(Value::as_str) {
         state.native_session_id = Some(sid.to_string());
     }
-    match event.get("type").and_then(Value::as_str) {
+    let kind = event.get("type").and_then(Value::as_str);
+    // Output proves the init model ran even if no result (with usage) follows.
+    if !state.executed && matches!(kind, Some("assistant" | "thinking" | "tool_call")) {
+        state.executed = true;
+        ctx.record_native_usage(
+            &format!("cursor-result-{}", ctx.attempt_count_for_usage()),
+            state.init_model.as_deref(),
+            None,
+            crate::store::TokenUsage::default(),
+        );
+    }
+    match kind {
+        Some("system") if event.get("subtype").and_then(Value::as_str) == Some("init") => {
+            state.init_model = event
+                .get("model")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            false
+        }
         Some("thinking") => {
             if event.get("subtype").and_then(Value::as_str) == Some("delta") {
                 if let Some(text) = event.get("text").and_then(Value::as_str) {
@@ -650,6 +905,14 @@ fn apply_event(ctx: &mut TurnCtx, state: &mut TurnState, event: &Value) -> bool 
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
                 || event.get("subtype").and_then(Value::as_str) == Some("error");
+            if let Some(usage) = result_usage(event, is_error) {
+                ctx.record_native_usage(
+                    &format!("cursor-result-{}", ctx.attempt_count_for_usage()),
+                    state.init_model.as_deref(),
+                    None,
+                    usage,
+                );
+            }
             if is_error {
                 state.turn_errored = true;
                 let detail = event
@@ -906,6 +1169,18 @@ fn plan_card(parts: &[WirePart], assistant_id: &str, errored: bool) -> Option<Wi
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_usage_restores_inclusive_cached_input() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/cursor-usage.json")).unwrap();
+        let usage = super::cursor_native_usage(&fixture[0]["usage"]);
+        usage.validate().unwrap();
+        assert_eq!(usage.input_tokens, Some(14304));
+        assert_eq!(usage.output_tokens, Some(34));
+        assert_eq!(usage.total(), Some(14338));
+        assert_eq!(usage.reasoning_tokens, None);
+    }
+
     use super::*;
     use crate::local::chat::TurnCtx;
 
@@ -1152,7 +1427,6 @@ mod tests {
         assert_eq!(models[2].id, "claude-opus-4-8[effort=high]");
         assert!(models.iter().all(|model| model.reasoning_levels.is_none()));
         assert!(parse_cursor_model_list("No models available for this account.").is_empty());
-        assert_eq!(fallback_models()[0].id, "auto");
     }
 
     #[test]
@@ -1319,5 +1593,16 @@ ActionRequiredError: Named models unavailable Free plans can only use Auto. Swit
             .await
             .unwrap();
         assert!(matches!(reject, ResumeAction::Nothing));
+    }
+
+    #[test]
+    fn only_a_successful_or_measured_result_attests_the_init_model() {
+        let usage = serde_json::json!({"usage": {"inputTokens": 3, "outputTokens": 1}});
+        assert_eq!(
+            result_usage(&serde_json::json!({}), false),
+            Some(Default::default())
+        );
+        assert_eq!(result_usage(&serde_json::json!({}), true), None);
+        assert_eq!(result_usage(&usage, true).unwrap().output_tokens, Some(1));
     }
 }

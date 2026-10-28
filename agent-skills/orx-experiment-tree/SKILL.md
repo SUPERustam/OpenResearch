@@ -11,6 +11,11 @@ rules this depends on — **never edit a node a run has answered** and
 **the run command + env is a fixed contract** — are the cardinal rules;
 everything below assumes them.
 
+Create a node only when a planned run will establish a baseline or test a
+hypothesis relevant to the project. Put a code change on that node only if it
+serves that baseline or hypothesis. Do not create nodes for unrelated cleanup,
+refactors, bug fixes, or dependency updates.
+
 ## Before the first launch
 
 Follow the session playbook's Python policy. Before launching, resolve the
@@ -23,8 +28,7 @@ setup and execution recipe in the project's run command.
 Every node exists to establish a baseline or test a hypothesis. A run that dies
 on an error does **neither** — nothing was established, nothing was tested — so
 there is nothing to protect: fix that node's branch in place and re-run the
-same node. Successive runs on one node are how you get it working; a new node
-is for a new question.
+same node. Successive runs on one node are how you get it working.
 
 Once a run *does* answer the node — it produced the result the node was after,
 good, bad, or `nan` — the node is **frozen**. Its branch is the code that
@@ -131,8 +135,9 @@ intended flow — do **not** edit a frozen node or rewrite the run command:
    #   …edit only the files that idea touches…
    git commit -am "cosine LR + warmup"
    ```
-   **Leave the run command alone.** Before launching, load `orx-evidence` and
-   make sure the committed code emits enough run evidence to judge the node.
+   **Leave the run command alone.** Before launching, ensure the committed code
+   prints its effective configuration, final metrics, and a compact summary to
+   stdout. Long runs should also print periodic searchable metrics.
 5. **Launch the round's ready children**: `orx exp run <childId> --backend <b>`
    (or omit `--backend` when a default target is set — see `orx-compute`). Remote
    backends can run siblings in parallel; `--backend local` shares this machine's
@@ -173,8 +178,10 @@ intended flow — do **not** edit a frozen node or rewrite the run command:
      exit condition. Don't keep calling it into a timeout.
 7. **Analyze each finish as it lands, then iterate.** Do the per-completion read
    *inside the loop above*, not deferred to the end — when a run finishes,
-   **actually read its results** with `orx logs <runId>` (see `orx-evidence`). To
-   see exactly what a finished node changed, diff its branch against its parent's
+   **actually read its results** from the file reported by `orx logs <runId>`
+   (see `orx-logs`) and, when it logged to Trackio, its curves with
+   `orx metrics <runId> <parentRunId>`, then use `orx-results` to interpret the outcome. To see exactly what a finished node changed, diff its
+   branch against its parent's
    branch (see `orx-git`). Don't infer from status alone. Each
    completion is a decision point with four moves:
    - **Repair** — the run answered nothing: fix this node's branch and
@@ -219,3 +226,27 @@ cat notes.md | orx exp desc <expId> --stdin   # overwrite from stdin (long markd
   append, read first, edit, and write back.
 - `<expId>` comes from `orx create-experiment` output or `orx project view
   <projectId>` (the experiment id, not a run or project id).
+
+## Restructure the tree — `orx exp move` and `orx exp archive`
+
+Fix the tree's shape when a node or subtree ended up under the wrong parent,
+instead of recreating nodes and re-running them.
+
+```sh
+orx exp move <expId> --parent <newParentId>   # re-parent the node and its subtree
+orx exp move <expId> --baseline               # make it a new root
+orx exp archive <expId> --only                # hide superseded nodes (also --ancestors/--descendants)
+orx exp unarchive <expId> --only              # restore them
+orx exp delete <expId>                        # permanently remove a leaf node, its runs and branch
+```
+
+- `move` changes only the tree; runs and results stay attached to the node.
+  Its branch is not rebased and still holds the old parent's code, so diffs
+  then compare against the new parent's branch (or the project base branch
+  for `--baseline`). Move only nodes whose code fits the new parent.
+- Don't recreate a node that has runs just to fix its place in the tree: move
+  or archive it so its results keep their provenance.
+- `delete` cannot be undone except for the branch (it prints the commit to
+  restore it from). Use it only when the user asks to remove a node
+  permanently; archive otherwise. It refuses nodes with children or active
+  runs, and branches checked out in any worktree.

@@ -400,6 +400,7 @@ mod tests {
             created_at: 1,
             updated_at: 1,
             chat_session_id: None,
+            archived: false,
         };
         store.create_local_experiment(&experiment).unwrap();
         experiment

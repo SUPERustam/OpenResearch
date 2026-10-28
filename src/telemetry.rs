@@ -107,6 +107,12 @@ fn flush_window() -> Duration {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Settings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desktop_zoom_percent: Option<i32>,
+    #[serde(default)]
+    pub acp_harnesses: Vec<crate::local::acp::Definition>,
+    #[serde(default)]
+    pub ssh: crate::config::SshSettings,
     /// Random anonymous id (uuid v4), generated once on first enabled run.
     #[serde(default)]
     pub install_id: Option<String>,
@@ -164,10 +170,15 @@ pub(crate) struct Settings {
     /// place; only the silent apply stops.
     #[serde(default)]
     pub auto_update: Option<bool>,
+    #[serde(default)]
+    pub update_channel: Option<crate::updates::ReleaseChannel>,
     /// Surfaces whose `first_action` event has already been sent, so a restart
     /// cannot re-report a later action as the user's first one.
     #[serde(default)]
     pub first_action_reported: Vec<String>,
+    /// Language the dashboard last reported it is displaying (e.g. `zh-CN`).
+    #[serde(default)]
+    pub dashboard_locale: Option<String>,
     #[serde(default)]
     harness_snapshot: Option<harness::InitialSnapshot>,
 }
@@ -246,7 +257,8 @@ pub(crate) fn set_compute_default(
     })
 }
 
-/// The persisted researcher profile. Read by the profile settings endpoint.
+/// The persisted researcher profile. Read by the profile settings endpoint and
+/// blank-project starter prompts.
 pub(crate) fn load_profile() -> ResearchProfile {
     let s = load_settings().unwrap_or_default();
     ResearchProfile {
@@ -305,6 +317,16 @@ pub(crate) fn set_auto_update_enabled(enabled: bool) -> std::io::Result<()> {
     mutate_settings(|settings| settings.auto_update = Some(enabled))
 }
 
+pub(crate) fn update_channel() -> crate::updates::ReleaseChannel {
+    load_settings()
+        .and_then(|settings| settings.update_channel)
+        .unwrap_or_else(crate::updates::current_release_channel)
+}
+
+pub(crate) fn set_update_channel(channel: crate::updates::ReleaseChannel) -> std::io::Result<()> {
+    mutate_settings(|settings| settings.update_channel = Some(channel))
+}
+
 pub(crate) fn github_default_prompt_seen() -> bool {
     load_settings()
         .and_then(|settings| settings.github_default_prompt_seen)
@@ -315,8 +337,46 @@ pub(crate) fn set_github_default_prompt_seen(seen: bool) -> std::io::Result<()> 
     mutate_settings(|settings| settings.github_default_prompt_seen = Some(seen))
 }
 
+fn dashboard_locale() -> Option<String> {
+    load_settings().and_then(|settings| settings.dashboard_locale)
+}
+
+pub(crate) fn set_dashboard_locale(locale: &str) -> std::io::Result<()> {
+    if dashboard_locale().as_deref() == Some(locale) {
+        return Ok(());
+    }
+    mutate_settings(|settings| settings.dashboard_locale = Some(locale.to_string()))
+}
+
 fn settings_path() -> PathBuf {
     crate::config::config_dir().join("settings.json")
+}
+
+pub(crate) fn ssh_settings() -> crate::error::Result<crate::config::SshSettings> {
+    let raw = match std::fs::read_to_string(settings_path()) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Default::default()),
+        Err(error) => return Err(error.into()),
+    };
+    let settings: Settings = serde_json::from_str(&raw)
+        .map_err(|error| crate::error::anyhow!("Cannot read SSH settings: {error}"))?;
+    for options in settings.ssh.hosts.values() {
+        crate::jobs::ssh::validate_host_options(options)?;
+    }
+    Ok(settings.ssh)
+}
+
+pub(crate) fn set_ssh_host(
+    host: String,
+    options: crate::config::SshHostSettings,
+) -> std::io::Result<()> {
+    mutate_settings(|settings| {
+        settings.ssh.hosts.insert(host, options);
+    })
+}
+
+pub(crate) fn set_ssh_default(host: Option<String>) -> std::io::Result<()> {
+    mutate_settings(|settings| settings.ssh.default_host = host)
 }
 
 fn outbox_dir() -> PathBuf {
@@ -431,7 +491,7 @@ fn lock_settings_file() -> Option<fd_lock::RwLock<std::fs::File>> {
 /// mutation is REFUSED (writes nothing) so a persisted opt-out hiding in an
 /// unparseable file is never silently dropped — the caller's change is lost,
 /// but the user's privacy choice is preserved.
-fn mutate_settings<F: FnOnce(&mut Settings)>(f: F) -> std::io::Result<()> {
+pub(crate) fn mutate_settings<F: FnOnce(&mut Settings)>(f: F) -> std::io::Result<()> {
     let _guard = SETTINGS_LOCK
         .get_or_init(|| std::sync::Mutex::new(()))
         .lock()
@@ -459,7 +519,7 @@ fn mutate_settings<F: FnOnce(&mut Settings)>(f: F) -> std::io::Result<()> {
 /// one persisted on first use. Returns `None` only if the id can't be persisted
 /// (so a run that couldn't write never invents a throwaway id that would inflate
 /// install counts on every invocation).
-fn install_id() -> Option<String> {
+pub(crate) fn install_id() -> Option<String> {
     // Fast path: already generated.
     if let Some(id) = load_settings().and_then(|s| s.install_id) {
         return Some(id);
@@ -574,6 +634,7 @@ pub(crate) fn set_persisted_disabled(disabled: bool) -> std::io::Result<()> {
     if result.is_ok() && disabled {
         cancel_pending();
         remove_queued_product_events();
+        let _ = crate::store::Store::open().and_then(|store| store.purge_pending_telemetry());
     }
     result
 }
@@ -602,7 +663,7 @@ fn flag() -> bool {
 
 fn http() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(reqwest::Client::new)
+    CLIENT.get_or_init(|| crate::net::remote_client().build().expect("http client"))
 }
 
 fn is_ci() -> bool {
@@ -615,7 +676,7 @@ fn build_payload_with_id(
     event_id: uuid::Uuid,
     properties: serde_json::Value,
 ) -> serde_json::Value {
-    json!({
+    let mut payload = json!({
         "schemaVersion": 1,
         "installId": install_id,
         "context": {
@@ -633,7 +694,11 @@ fn build_payload_with_id(
             "occurredAt": iso8601_utc(crate::store::now_ms()),
             "properties": properties,
         }],
-    })
+    });
+    if let Some(locale) = dashboard_locale() {
+        payload["context"]["locale"] = json!(locale);
+    }
+    payload
 }
 
 #[cfg(test)]
@@ -649,7 +714,7 @@ fn build_payload(
 /// (`YYYY-MM-DDTHH:MM:SS.mmmZ`). Pure civil-date math on the UTC timeline — no
 /// timezone or DST involved — so no date crate is needed (the codebase has
 /// none). Uses the standard days-from-civil algorithm.
-fn iso8601_utc(ms: i64) -> String {
+pub(crate) fn iso8601_utc(ms: i64) -> String {
     let ms = ms.max(0);
     let secs = ms / 1000;
     let millis = ms % 1000;
@@ -703,12 +768,14 @@ fn persist_payload(event_id: uuid::Uuid, payload: &serde_json::Value) -> Option<
     let dir = outbox_dir();
     std::fs::create_dir_all(&dir).ok()?;
     let path = dir.join(format!("{event_id}.json"));
-    let tmp = dir.join(format!(".{event_id}.tmp"));
-    std::fs::write(&tmp, serde_json::to_vec(payload).ok()?).ok()?;
-    if std::fs::rename(&tmp, &path).is_err() {
-        let _ = std::fs::remove_file(tmp);
-        return None;
-    }
+    crate::local::git::atomic_write_with_mode(
+        &path,
+        &serde_json::to_vec(payload).ok()?,
+        Some(0o600),
+    )
+    .ok()?;
+    #[cfg(unix)]
+    std::fs::File::open(&dir).ok()?.sync_all().ok()?;
     Some(path)
 }
 
@@ -765,10 +832,56 @@ fn remove_queued_product_events() {
     }
 }
 
+pub(crate) fn accounting_reports_enabled() -> bool {
+    is_enabled(flag())
+}
+
+pub(crate) fn pending_event_payload(
+    event: &str,
+    properties: serde_json::Value,
+) -> Option<(String, serde_json::Value)> {
+    if !is_enabled(flag()) {
+        return None;
+    }
+    let event_id = uuid::Uuid::new_v4();
+    let payload = build_payload_with_id(event, &install_id()?, event_id, properties);
+    Some((event_id.to_string(), payload))
+}
+
+fn transfer_pending_events() {
+    if !is_enabled(flag()) {
+        return;
+    }
+    let Ok(store) = crate::store::Store::open() else {
+        return;
+    };
+    let Ok(events) = store.pending_telemetry() else {
+        return;
+    };
+    for (id, payload) in events {
+        let Ok(event_id) = uuid::Uuid::parse_str(&id) else {
+            continue;
+        };
+        if persist_payload(event_id, &payload).is_some() {
+            let _ = store.acknowledge_pending_telemetry(&id);
+        }
+    }
+}
+
+// Stat each path once: concurrent orx processes delete outbox files mid-sort, and a key
+// that changes between comparisons breaks total order, which makes `sort` panic.
+fn sort_oldest_first(
+    paths: &mut [PathBuf],
+    mtime: impl FnMut(&PathBuf) -> Option<std::time::SystemTime>,
+) {
+    paths.sort_by_cached_key(mtime);
+}
+
 pub(crate) fn retry_outbox() {
     if environment_disabled_reason().is_some() {
         return;
     }
+    transfer_pending_events();
     let Ok(entries) = std::fs::read_dir(outbox_dir()) else {
         return;
     };
@@ -777,7 +890,7 @@ pub(crate) fn retry_outbox() {
         .map(|entry| entry.path())
         .filter(|path| path.extension().and_then(|extension| extension.to_str()) == Some("json"))
         .collect();
-    paths.sort_by_key(|path| {
+    sort_oldest_first(&mut paths, |path| {
         std::fs::metadata(path)
             .and_then(|meta| meta.modified())
             .ok()
@@ -868,6 +981,22 @@ fn consent_distinct_id(agreed: bool) -> String {
     CONSENT_SENTINEL_ID.to_string()
 }
 
+fn consent_payload(agreed: bool, distinct_id: &str, event_id: uuid::Uuid) -> serde_json::Value {
+    let mut payload = build_payload_with_id(
+        "telemetry_consent",
+        distinct_id,
+        event_id,
+        json!({ "agreed": agreed }),
+    );
+    // An opt-out carries no dimension beyond the choice itself.
+    if !agreed {
+        if let Some(context) = payload["context"].as_object_mut() {
+            context.remove("locale");
+        }
+    }
+    payload
+}
+
 /// Record a telemetry toggle choice — `cli_telemetry_consent` with
 /// `{ agreed: bool }`. Within an eligible official build, this is the ONE event
 /// that ignores the user's telemetry preference: it must land even when the
@@ -888,14 +1017,8 @@ pub(crate) async fn record_consent(agreed: bool) {
     if environment_disabled_reason().is_some() {
         return;
     }
-    let distinct_id = consent_distinct_id(agreed);
     let event_id = uuid::Uuid::new_v4();
-    let payload = build_payload_with_id(
-        "telemetry_consent",
-        &distinct_id,
-        event_id,
-        json!({ "agreed": agreed }),
-    );
+    let payload = consent_payload(agreed, &consent_distinct_id(agreed), event_id);
     let path = persist_payload(event_id, &payload);
     let send = deliver_queued_payload(path, payload);
     // Cap the wait so the settings POST / command return promptly even if the
@@ -925,6 +1048,38 @@ pub(crate) enum ProjectCreationMode {
     Blank,
     Folder,
     Paper,
+}
+
+/// How `orx up` presents the dashboard. The desktop app reports `app_started` instead.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum UpLaunchMode {
+    Browser,
+    NoBrowser,
+    /// Plain `orx up` inside an SSH session, which prints forwarding steps instead.
+    Ssh,
+    Remote,
+    RemoteHost,
+}
+
+impl UpLaunchMode {
+    pub(crate) fn of(args: &crate::UpArgs) -> Self {
+        if args.remote_host {
+            Self::RemoteHost
+        } else if args.remote.is_some() {
+            Self::Remote
+        } else if args.no_browser {
+            Self::NoBrowser
+        } else if crate::remote::detect_ssh_session().is_some() {
+            Self::Ssh
+        } else {
+            Self::Browser
+        }
+    }
+}
+
+pub(crate) fn capture_browser_open_failed(mode: UpLaunchMode) {
+    capture("browser_open_failed", json!({ "mode": mode }));
 }
 
 pub(crate) fn capture_project_created(local: bool, mode: Option<ProjectCreationMode>) {
@@ -991,16 +1146,20 @@ impl TelemetrySession {
     /// The `--no-telemetry` flag is read from the process-global (set in `main`
     /// before this is called), matching every other event path. The handle is
     /// registered in the pending set and flushed by `finish`.
-    pub(crate) fn start(command: Option<&str>) -> TelemetrySession {
+    pub(crate) fn start(command: Option<&str>, mode: Option<UpLaunchMode>) -> TelemetrySession {
         retry_outbox();
         if let Some(command) = command {
             // Bare base name; `build_payload` prefixes it → wire event `cli_command`.
-            capture("command", json!({ "command": command }));
+            let mut properties = json!({ "command": command });
+            if let Some(mode) = mode {
+                properties["mode"] = json!(mode);
+            }
+            capture("command", properties);
         }
         TelemetrySession
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(desktop_app)]
     pub(crate) fn start_app() -> TelemetrySession {
         retry_outbox();
         capture("app_started", json!({}));
@@ -1014,6 +1173,7 @@ impl TelemetrySession {
     /// site in `main` already threads it, so keeping the param avoids
     /// re-touching main).
     pub(crate) async fn finish(self, _success: bool) {
+        retry_outbox();
         flush_pending().await;
     }
 }
@@ -1297,6 +1457,42 @@ mod tests {
     }
 
     #[test]
+    fn acp_definitions_are_independent_and_preserve_settings() {
+        let _guard = EnvGuard::new(OPT_VARS);
+        let dir = std::env::temp_dir().join(format!("orx-acp-settings-{}", uuid::Uuid::new_v4()));
+        std::env::set_var("XDG_CONFIG_HOME", &dir);
+        set_persisted_disabled(true).unwrap();
+        let first = crate::local::acp::Definition {
+            id: format!("acp:{}", uuid::Uuid::new_v4()),
+            name: "First".into(),
+            executable: "agent-one".into(),
+            arguments: vec!["a b".into(), "'quoted'".into()],
+        };
+        let second = crate::local::acp::Definition {
+            id: format!("acp:{}", uuid::Uuid::new_v4()),
+            name: "Second".into(),
+            executable: "agent-two".into(),
+            arguments: vec![],
+        };
+        crate::local::acp::save(first.clone(), true).unwrap();
+        crate::local::acp::save(second.clone(), true).unwrap();
+        assert_eq!(
+            crate::local::acp::definitions(),
+            [first.clone(), second.clone()]
+        );
+        assert!(crate::local::acp::save(first.clone(), true).is_err());
+        let mut edited = first.clone();
+        edited.executable = "new-agent".into();
+        crate::local::acp::save(edited.clone(), false).unwrap();
+        assert_eq!(crate::local::acp::definitions(), [edited, second.clone()]);
+        crate::local::acp::remove(&first.id).unwrap();
+        assert_eq!(crate::local::acp::definitions(), [second]);
+        assert!(crate::local::acp::save(first, false).is_err());
+        assert_eq!(load_settings().unwrap().telemetry_disabled, Some(true));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn data_dir_and_telemetry_fields_dont_clobber_each_other() {
         // Regression: the Storage feature persists `data_dir` in the *same*
         // settings.json telemetry owns. Both must go through mutate_settings so a
@@ -1435,6 +1631,73 @@ mod tests {
         assert!(disabled_lit_sources().is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ssh_settings_preserve_siblings_and_reject_corrupt_config() {
+        use crate::config::SshHostSettings;
+        let _g = EnvGuard::new(OPT_VARS);
+        let dir = std::env::temp_dir().join(format!("orx-tel-ssh-{}", uuid::Uuid::new_v4()));
+        std::env::set_var("XDG_CONFIG_HOME", &dir);
+        assert!(ssh_settings().unwrap().hosts.is_empty());
+        set_persisted_disabled(true).unwrap();
+        let options = SshHostSettings {
+            container: Some("research".into()),
+            remote_root: Some("/scratch/lab/orx".into()),
+            keep_remote_runs: true,
+        };
+        set_ssh_host("lab".into(), options.clone()).unwrap();
+        set_ssh_default(Some("lab".into())).unwrap();
+        set_compute_default(Some("ssh".into()), None).unwrap();
+        let settings = ssh_settings().unwrap();
+        assert_eq!(settings.default_host.as_deref(), Some("lab"));
+        assert_eq!(settings.hosts["lab"], options);
+        assert_eq!(load_settings().unwrap().telemetry_disabled, Some(true));
+        set_ssh_host("lab".into(), SshHostSettings::default()).unwrap();
+        set_ssh_default(None).unwrap();
+        assert_eq!(
+            ssh_settings().unwrap().hosts["lab"],
+            SshHostSettings::default()
+        );
+        for raw in [
+            r#"{"ssh":null}"#,
+            r#"{"ssh":{"hosts":{"lab":{"container":""}}}}"#,
+            r#"{"ssh":{"hosts":[]}}"#,
+            "{",
+        ] {
+            std::fs::write(settings_path(), raw).unwrap();
+            assert!(ssh_settings().is_err(), "{raw}");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(desktop_app)]
+    #[test]
+    fn desktop_zoom_roundtrip_preserves_other_preferences() {
+        let _guard = EnvGuard::new(OPT_VARS);
+        let dir = std::env::temp_dir().join(format!("orx-desktop-zoom-{}", uuid::Uuid::new_v4()));
+        std::env::set_var("XDG_CONFIG_HOME", &dir);
+
+        assert_eq!(crate::config::desktop_zoom_percent(), 100);
+        set_persisted_disabled(true).unwrap();
+        crate::config::set_desktop_zoom_percent(130).unwrap();
+        set_compute_default(Some("local".into()), None).unwrap();
+        assert_eq!(crate::config::desktop_zoom_percent(), 130);
+        let saved = load_settings().unwrap();
+        assert_eq!(saved.desktop_zoom_percent, Some(130));
+        assert_eq!(saved.telemetry_disabled, Some(true));
+        assert_eq!(saved.default_backend.as_deref(), Some("local"));
+
+        for invalid in [0, 250] {
+            mutate_settings(|settings| settings.desktop_zoom_percent = Some(invalid)).unwrap();
+            assert_eq!(crate::config::desktop_zoom_percent(), 100);
+        }
+        crate::config::set_desktop_zoom_percent(100).unwrap();
+        assert_eq!(load_settings().unwrap().desktop_zoom_percent, Some(100));
+        assert_eq!(load_settings().unwrap().telemetry_disabled, Some(true));
+        std::fs::write(settings_path(), r#"{"telemetryDisabled":true}"#).unwrap();
+        assert_eq!(crate::config::desktop_zoom_percent(), 100);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -1687,6 +1950,7 @@ mod tests {
         for (bare, wire) in [
             ("command", "cli_command"),
             ("app_started", "cli_app_started"),
+            ("dashboard_locale", "cli_dashboard_locale"),
             ("onboarding_completed", "cli_onboarding_completed"),
             (
                 "onboarding_research_profile_submitted",
@@ -1966,7 +2230,33 @@ mod tests {
                 json!({ "kind": "run", "local": true, "computeTarget": "local" }),
             ),
         ];
-        for payload in payloads {
+        let launch_modes = [
+            UpLaunchMode::Browser,
+            UpLaunchMode::NoBrowser,
+            UpLaunchMode::Ssh,
+            UpLaunchMode::Remote,
+            UpLaunchMode::RemoteHost,
+        ];
+        let launch_payloads = launch_modes.into_iter().flat_map(|mode| {
+            [
+                build_payload(
+                    "command",
+                    "cli-release-contract-test",
+                    json!({ "command": "up", "mode": mode }),
+                ),
+                build_payload(
+                    "browser_open_failed",
+                    "cli-release-contract-test",
+                    json!({ "mode": mode }),
+                ),
+            ]
+        });
+        let localized = ["app_started", "dashboard_locale"].map(|event| {
+            let mut payload = build_payload(event, "cli-release-contract-test", json!({}));
+            payload["context"]["locale"] = json!("zh-CN");
+            payload
+        });
+        for payload in payloads.into_iter().chain(launch_payloads).chain(localized) {
             assert_eq!(post_payload(&payload).await, DeliveryOutcome::Acknowledged);
         }
     }
@@ -1983,14 +2273,29 @@ mod tests {
     }
 
     #[test]
+    fn payload_context_carries_the_dashboard_locale_once_reported() {
+        let _g = EnvGuard::new(OPT_VARS);
+        let dir = std::env::temp_dir().join(format!("orx-tel-locale-{}", uuid::Uuid::new_v4()));
+        std::env::set_var("XDG_CONFIG_HOME", &dir);
+        let before = build_payload("app_started", "did", json!({}));
+        assert!(before["context"].get("locale").is_none());
+        set_dashboard_locale("zh-CN").unwrap();
+        let after = build_payload("app_started", "did", json!({}));
+        assert_eq!(after["context"]["locale"], "zh-CN");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn consent_payload_carries_agreed_flag() {
         let _g = EnvGuard::new(OPT_VARS);
         let dir = std::env::temp_dir().join(format!("orx-tel-agreed-{}", uuid::Uuid::new_v4()));
         std::env::set_var("XDG_CONFIG_HOME", &dir);
+        set_dashboard_locale("es").unwrap();
         for agreed in [true, false] {
-            let p = build_payload("telemetry_consent", "did", json!({ "agreed": agreed }));
+            let p = consent_payload(agreed, "did", uuid::Uuid::new_v4());
             assert_eq!(p["events"][0]["name"], "cli_telemetry_consent");
             assert_eq!(p["events"][0]["properties"]["agreed"], agreed);
+            assert_eq!(p["context"].get("locale").is_some(), agreed);
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2090,6 +2395,33 @@ mod tests {
         assert!(serde_json::from_value::<ProjectCreationMode>(json!("/private/path")).is_err());
     }
 
+    #[test]
+    fn up_launch_modes_follow_the_dashboard_code_paths() {
+        let _g = EnvGuard::new(&["SSH_CONNECTION", "SSH_TTY", "SSH_CLIENT"]);
+        let args = |argv: &[&str]| {
+            use clap::Parser;
+            match crate::Cli::parse_from(argv).command {
+                Some(crate::Command::Up(args)) => UpLaunchMode::of(&args),
+                _ => unreachable!(),
+            }
+        };
+        let cases = [
+            (&["orx", "up"][..], "browser"),
+            (&["orx", "up", "--no-browser"], "no_browser"),
+            (&["orx", "up", "--remote", "box"], "remote"),
+            (
+                &["orx", "up", "--no-browser", "--remote-host"],
+                "remote_host",
+            ),
+        ];
+        for (argv, mode) in cases {
+            assert_eq!(json!(args(argv)), json!(mode), "{argv:?}");
+        }
+        std::env::set_var("SSH_CONNECTION", "1.2.3.4 5 6.7.8.9 22");
+        assert_eq!(args(&["orx", "up"]), UpLaunchMode::Ssh);
+        assert_eq!(json!(UpLaunchMode::Ssh), json!("ssh"));
+    }
+
     #[tokio::test]
     async fn environment_disabled_consent_never_creates_an_install_id() {
         let _g = EnvGuard::new(OPT_VARS);
@@ -2120,12 +2452,13 @@ mod tests {
         }
         assert!(environment_disabled_reason().is_some());
 
-        let session = TelemetrySession::start(Some("up"));
+        let session = TelemetrySession::start(Some("up"), Some(UpLaunchMode::Browser));
         harness::capture_initial(&json!({"harnesses":[]}));
         harness::SetupAttempt::new("opencode", "install", "automatic");
         capture_onboarding_completed();
         capture_onboarding_research_profile(&ResearchProfile::default());
         capture_project_created(true, Some(ProjectCreationMode::Blank));
+        capture_browser_open_failed(UpLaunchMode::Browser);
         capture_demo_welcome_choice("explore_demo");
         capture_chat_session_started("codex");
         capture_chat_message_sent("codex");
@@ -2221,5 +2554,18 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn outbox_sort_stats_each_file_once() {
+        let mut paths: Vec<PathBuf> = (0..64)
+            .map(|i| PathBuf::from(format!("{i}.json")))
+            .collect();
+        let mut stats = 0;
+        sort_oldest_first(&mut paths, |_| {
+            stats += 1;
+            None
+        });
+        assert_eq!(stats, paths.len());
     }
 }

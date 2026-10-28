@@ -53,7 +53,7 @@ class Provider(http.server.BaseHTTPRequestHandler):
         events = [
             ('message_start', {'type': 'message_start', 'message': {'id': 'msg_fixture', 'type': 'message', 'role': 'assistant', 'model': body.get('model'), 'content': [], 'stop_reason': None, 'stop_sequence': None, 'usage': {'input_tokens': 10, 'output_tokens': 0}}}),
             ('content_block_start', {'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}}),
-            ('content_block_delta', {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': 'fixture reply'}}),
+            ('content_block_delta', {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': Provider.reply}}),
             ('content_block_stop', {'type': 'content_block_stop', 'index': 0}),
             ('message_delta', {'type': 'message_delta', 'delta': {'stop_reason': 'end_turn', 'stop_sequence': None}, 'usage': {'output_tokens': 3}}),
             ('message_stop', {'type': 'message_stop'}),
@@ -73,6 +73,7 @@ class Provider(http.server.BaseHTTPRequestHandler):
 
 
 Provider.calls = []
+Provider.reply = 'fixture reply'
 
 
 def wait_for(check, process, log):
@@ -92,16 +93,18 @@ def wait_for(check, process, log):
 
 
 @contextlib.contextmanager
-def server(binary, root, generation, provider):
+def server(binary, root, generation, provider, *, config_overrides=None, inline=None):
     for name in ['home', 'data', 'config', 'state', 'cache', 'project']:
         (root / name).mkdir(parents=True, exist_ok=True)
     config = root / 'config' / 'opencode'
     config.mkdir(exist_ok=True)
-    (config / 'opencode.json').write_text(json.dumps({
+    configuration = {
         'model': 'anthropic/claude-sonnet-4-5', 'small_model': 'anthropic/claude-sonnet-4-5',
         'provider': {'anthropic': {'models': {'claude-sonnet-4-5': {'name': 'Fixture Sonnet', 'limit': {'context': 200000, 'output': 4096}}}, 'options': {'baseURL': provider, 'apiKey': 'fixture-key'}}},
         'permission': {'*': 'allow'}, 'snapshot': False,
-    }))
+    }
+    configuration.update(config_overrides or {})
+    (config / 'opencode.json').write_text(json.dumps(configuration))
     env = {'PATH': os.environ['PATH'], 'HOME': str(root / 'home'),
            'XDG_DATA_HOME': str(root / 'data'), 'XDG_CONFIG_HOME': str(root / 'config'),
            'XDG_STATE_HOME': str(root / 'state'), 'XDG_CACHE_HOME': str(root / 'cache'),
@@ -110,6 +113,8 @@ def server(binary, root, generation, provider):
            'OPENCODE_DISABLE_AUTOUPDATE': '1', 'OPENCODE_DISABLE_MODELS_FETCH': '1',
            'OPENCODE_CONFIG_PROJECT_DISABLE': '1', 'OPENCODE_DISABLE_PROJECT_CONFIG': '1',
            'OPENCODE_DISABLE_DEFAULT_PLUGINS': '1'}
+    if inline is not None:
+        env['OPENCODE_CONFIG_CONTENT'] = json.dumps(inline)
     version = subprocess.run([binary, '--version'], env=env, cwd=root / 'project', capture_output=True, text=True, check=True, timeout=30).stdout.strip()
     with socket.socket() as port_socket:
         port_socket.bind(('127.0.0.1', 0))
@@ -119,10 +124,31 @@ def server(binary, root, generation, provider):
         process = subprocess.Popen([binary, 'serve', '--hostname', '127.0.0.1', '--port', str(port)] + (['--stdio'] if generation == 2 else []), env=env, cwd=root / 'project', stdout=output, stderr=output, stdin=subprocess.PIPE)
         try:
             url = f'http://127.0.0.1:{port}'
-            health = '/global/health' if generation == 1 else '/api/health'
-            wait_for(lambda: request(url + health), process, log)
+            # V2's readiness route moved: /api/health (<=2.0.3) -> /api/status
+            # (2.0.4-2.0.5) -> /api/info (2.0.6+). The SPA fallback can serve
+            # HTML with a 200 on unknown routes, so require a JSON `version`.
+            def healthy():
+                if generation == 1:
+                    return request(url + '/global/health')
+                last = None
+                for path in ['/api/info', '/api/status', '/api/health']:
+                    try:
+                        body = request(url + path)
+                    except (AssertionError, ValueError) as error:
+                        last = error
+                        continue
+                    if isinstance(body, dict) and isinstance(body.get('version'), str):
+                        return body
+                if last:
+                    raise last
+            wait_for(healthy, process, log)
             print(f'V{generation} ready: {version}', flush=True)
             if generation == 1:
+                if inline is not None:
+                    resolved = subprocess.run([binary, 'debug', 'config', '--pure'], env=env, cwd=root / 'project', capture_output=True, text=True, check=True, timeout=30)
+                    effective = json.loads(resolved.stdout)
+                    for name in ['title', 'compaction']:
+                        assert effective['agent'][name]['model'] == inline['agent'][name]['model']
                 original_sessions = request(url + '/session')
                 result = subprocess.run([binary, 'run', '--agent', 'plan', '--model', 'anthropic/claude-sonnet-4-5', 'title fixture prompt'], env={**env, 'OPENCODE_DB': ':memory:'}, cwd=root / 'project', capture_output=True, text=True, check=True, timeout=60)
                 assert 'fixture reply' in result.stdout, result
@@ -156,7 +182,9 @@ def messages(url, session):
 def prompt_v2(url, session, text, process, log):
     before = len(messages(url, session))
     request(f'{url}/api/session/{session}/prompt', 'POST', {'text': text})
-    return wait_for(lambda: (items if len(items) > before and items[-1]['type'] == 'assistant' and items[-1]['time'].get('completed') else None) if (items := messages(url, session)) else None, process, log)
+    # 2.0.6+ appends a synthetic {"type": "idle"} entry when a run finishes, so
+    # the completed assistant reply is not necessarily the last item.
+    return wait_for(lambda: next((m for m in messages(url, session)[before:] if m['type'] == 'assistant' and m['time'].get('completed')), None), process, log)
 
 
 def main():
@@ -202,7 +230,13 @@ def main():
             prompt_v2(url, session, 'continued fixture prompt', process, log)
             created = request(url + '/api/session', 'POST', {'title': 'new V2 fixture', 'location': {'directory': str(root / 'upgrade' / 'project')}})['data']['id']
             prompt_v2(url, created, 'new fixture prompt', process, log)
-            exported = request(f'{url}/api/session/{session}/export')['data']
+            # Export moved under /api/experimental when /api/status arrived
+            # (2.0.4+); the /api/health-era layout serves it at /api. The SPA
+            # fallback can answer the wrong prefix with HTML (ValueError).
+            try:
+                exported = request(f'{url}/api/experimental/session/{session}/export')['data']
+            except (AssertionError, ValueError):
+                exported = request(f'{url}/api/session/{session}/export')['data']
             assert exported['info']['id'] == session
             assert [message['id'] for message in exported['messages']] == [message['id'] for message in messages(url, session)]
             assert request(f'{url}/api/session/{session}/inbox') == {'data': []}
