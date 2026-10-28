@@ -85,6 +85,12 @@ enum Command {
     /// Show a run's compact log summary (path, size, and preview) by default.
     Logs(LogsArgs),
 
+    /// Print the command that opens a run's TensorBoard logs.
+    Tensorboard(TensorboardArgs),
+
+    /// Summarize the metrics runs logged to Trackio: local, a Hugging Face Space, or a server.
+    Metrics(MetricsArgs),
+
     /// Add an experiment node to a local `orx up` project.
     #[command(name = "create-experiment")]
     CreateExperiment(CreateExperimentArgs),
@@ -144,6 +150,9 @@ enum Command {
     /// Supervise one local run: tail backend logs, persist status, and honor
     /// local cancel intent. Spawned detached by `exp run`.
     Supervise(SuperviseArgs),
+
+    #[command(hide = true)]
+    RentalSupervise { config: std::path::PathBuf },
 
     /// Start the local autoresearch dashboard on 127.0.0.1: embedded UI,
     /// JSON/SSE API over the local store, and the opencode agent proxy.
@@ -253,6 +262,27 @@ pub struct RunsArgs {
 #[derive(Args, Debug)]
 pub struct LogsArgs {
     pub run_id: String,
+}
+
+#[derive(Args, Debug)]
+pub struct TensorboardArgs {
+    pub run_id: String,
+}
+
+#[derive(Args, Debug)]
+pub struct MetricsArgs {
+    /// One or more run ids; several print one after another for comparison.
+    #[arg(required = true)]
+    pub run_ids: Vec<String>,
+    /// Only metrics whose name contains this text (case-insensitive). Repeatable.
+    #[arg(long = "metric")]
+    pub metrics: Vec<String>,
+    /// Sampled points per metric, first and last included.
+    #[arg(long, default_value_t = 20)]
+    pub points: usize,
+    /// Print JSON instead of the text summary.
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args, Debug)]
@@ -531,6 +561,22 @@ pub enum ExpCommand {
         /// Restore descendants, excluding the selected experiment.
         #[arg(long, group = "unarchive_scope")]
         descendants: bool,
+    },
+
+    /// Permanently delete an experiment with no child experiments or active runs, its runs, and
+    /// its orx/ branch (refused while any worktree has it checked out).
+    Delete { exp_id: String },
+
+    /// Re-parent an experiment and its subtree. Only the tree changes; git branches stay put.
+    #[command(group(clap::ArgGroup::new("move_target").required(true)))]
+    Move {
+        exp_id: String,
+        /// New parent experiment in the same project.
+        #[arg(long, group = "move_target")]
+        parent: Option<String>,
+        /// Make the experiment a new root (baseline).
+        #[arg(long, group = "move_target")]
+        baseline: bool,
     },
 
     /// Show the experiment's status, run command, and latest run.
@@ -975,6 +1021,9 @@ impl DiscoveryPriority {
 
 #[derive(Args, Debug)]
 pub struct VersionArgs {
+    /// Print the desktop build identity.
+    #[arg(long, hide = true, conflicts_with_all = ["check", "json", "build_channel", "dashboard_protocol"])]
+    pub build_id: bool,
     /// Print the embedded telemetry build channel.
     #[arg(long, hide = true, conflicts_with_all = ["check", "json"])]
     pub build_channel: bool,
@@ -1060,6 +1109,38 @@ fn explain_removed_spawn_flags(mut error: clap::Error) -> clap::Error {
 // on worker threads. A `current_thread` flavor would deadlock. See commands::app.
 #[tokio::main]
 async fn main() {
+    #[cfg(all(target_os = "macos", debug_assertions))]
+    if std::env::args().nth(1).as_deref() == Some("--dev-desktop") {
+        let port = std::env::args()
+            .nth(2)
+            .and_then(|arg| arg.parse::<u16>().ok());
+        if let Some(port) = port.filter(|port| (5201..=5209).contains(port)) {
+            commands::app::run_dev(port);
+        } else {
+            eprintln!("--dev-desktop requires a dev slot UI port (5201–5209)");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if std::env::var_os("ORX_SSH_ASKPASS_ENDPOINT").is_some() {
+        if jobs::ssh::service::askpass().await.is_err() {
+            std::process::exit(1);
+        }
+        return;
+    }
+    if std::env::args().nth(1).as_deref() == Some("ssh-service") {
+        let result = if std::env::args().nth(2).as_deref() == Some("stop") {
+            jobs::ssh::service::shutdown_idle().await
+        } else {
+            jobs::ssh::service::run().await
+        };
+        if let Err(error) = result {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     #[cfg(windows)]
     {
         install_panic_reporter();
@@ -1321,6 +1402,7 @@ fn should_capture_command(command: &Command) -> bool {
     !matches!(
         command,
         Command::Supervise(_)
+            | Command::RentalSupervise { .. }
             | Command::Update(UpdateArgs {
                 background: true,
                 ..
@@ -1340,6 +1422,8 @@ fn command_name(command: &Command) -> &'static str {
         Command::Agent(_) => "agent",
         Command::Runs(_) => "runs",
         Command::Logs(_) => "logs",
+        Command::Tensorboard(_) => "tensorboard",
+        Command::Metrics(_) => "metrics",
         Command::CreateExperiment(_) => "create-experiment",
         Command::Compute(_) => "compute",
         Command::Instance(_) => "instance",
@@ -1358,6 +1442,7 @@ fn command_name(command: &Command) -> &'static str {
         Command::Delete(_) => "delete",
         Command::Serve(_) => "serve",
         Command::Supervise(_) => "supervise",
+        Command::RentalSupervise { .. } => "rental-supervise",
         Command::Up(_) => "up",
         Command::Telemetry(_) => "telemetry",
         Command::Feedback(_) => "feedback",
@@ -1390,6 +1475,8 @@ async fn dispatch(command: Command) -> error::Result<()> {
         Command::Agent(args) => commands::agent::run(args).await,
         Command::Runs(args) => commands::runs::run(args).await,
         Command::Logs(args) => commands::logs::run(args).await,
+        Command::Tensorboard(args) => commands::tensorboard::run(args).await,
+        Command::Metrics(args) => commands::metrics::run(args).await,
         Command::CreateExperiment(args) => commands::create_experiment::run(args).await,
         Command::Compute(args) => commands::compute::run(args).await,
         Command::Instance(args) => commands::instance::run(args).await,
@@ -1411,6 +1498,7 @@ async fn dispatch(command: Command) -> error::Result<()> {
         Command::Delete(args) => commands::delete::run(args).await,
         Command::Serve(args) => commands::serve::run(args).await,
         Command::Supervise(args) => commands::supervise::run(args).await,
+        Command::RentalSupervise { config } => jobs::rental::supervise(&config).await,
         Command::Up(args) => match args.remote.clone() {
             Some(host) => commands::up_remote::run(&host, args).await,
             None => commands::up::run(args).await,

@@ -109,7 +109,6 @@ export function ChatAttachmentsTab({ projectId }: { projectId: string }) {
                 <IconButton
                   size="small"
                   className="shrink-0"
-                  title={m.chat_attachments_add()}
                   aria-label={m.chat_attachments_add()}
                   onClick={() => addToChat(attachment)}
                 >

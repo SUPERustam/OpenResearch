@@ -116,7 +116,8 @@ pub(crate) fn resolve_run(store: Store, run_id: &str) -> Result<LocalPlane> {
     })
 }
 
-mod local_plane;
+mod checkout_hint;
+pub(crate) mod local_plane;
 
 pub(crate) use local_plane::LocalPlane;
 
