@@ -105,7 +105,6 @@ pub fn pick_folder() -> Result<Option<PathBuf>> {
 
 #[cfg(all(test, target_os = "windows"))]
 mod tests {
-    use super::*;
     use std::process::{Command, Output};
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
