@@ -106,16 +106,29 @@ pub fn pick_folder() -> Result<Option<PathBuf>> {
 #[cfg(all(test, target_os = "windows"))]
 mod tests {
     use super::*;
-    use std::process::Output;
+    use std::process::{Command, Output};
+    use std::sync::Mutex;
     use std::time::{Duration, Instant};
 
+    /// One owner window at a time. Parallel STA pickers stall on the CI desktop.
+    static PICKER_TESTS: Mutex<()> = Mutex::new(());
+
+    /// The product launcher hides its console and refuses prompts. Tests need a
+    /// real window station so `Form.Show()` can return.
+    fn windows_picker_test_command(script: &str) -> Command {
+        let mut command = Command::new("powershell.exe");
+        command.args(["-NoProfile", "-STA", "-Command", script]);
+        command
+    }
+
     fn run_picker(result: &str, path: &str) -> Output {
+        let _one_picker = PICKER_TESTS.lock().expect("folder picker test lock");
         let script = format!(
             "{}\ntry {{ & {{ {} }} }} finally {{ Assert-PickerDisposed }}",
             include_str!("folder_picker_test.ps1"),
             include_str!("folder_picker.ps1")
         );
-        let mut child = windows_picker_command(&script)
+        let mut child = windows_picker_test_command(&script)
             .env("ORX_PICKER_TEST_RESULT", result)
             .env("ORX_PICKER_TEST_PATH", path)
             .stdin(std::process::Stdio::null())
